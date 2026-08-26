@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: blink
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: blink_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+        
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.22'
+      
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+      path: ~/go/pkg/mod
+      key: ${{runner.os}}-go-${{hashFiles('**/go.sum')}}
+      restore-keys: |
+        ${{runner.os}}-go-
+      
+    - name: Download dependencies
+      run: go mod Download
+
+    - name: Format check
+      run: go fmt ./...
+
+    - name: Install golangci-lint
+      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+    - name: Lint
+      run: golangci-lint run ./...
+
+    - name: Run tests
+      env:
+        DATABASE_URL: postgres://blink:devpass@localhost:5432/blink_db
+        REDIS_URL: redis://localhost:6379
+      run: go test -v -race ./...
+
+    - name: Build
+      run: go build -o bin/api cmd/api/main.go
+
+
