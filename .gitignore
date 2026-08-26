@@ -1,0 +1,57 @@
+# Go
+bin/
+dist/
+*.out
+*.test
+*.prof
+*.coverprofile
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+.DS_Store
+
+# Dependencies
+vendor/
+
+# Logs
+*.log
+logs/
+
+# Build
+/bin
+/dist
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Local development
+.postgres
+.redis
+docker-compose.override.yml
+
+# Migrations lock (optional - some teams commit, some don't)
+# migrations/schema.lock
+
+# air (live reload tool, if using it)
+tmp/
