@@ -40,6 +40,8 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	// Set Content-Type, Set data, Encode to JSON
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
+	if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+		zlog.Error().Err(err).Msg("failed to write health response")
+	}
 	zlog.Debug().Msg("Health check passed")
 }
