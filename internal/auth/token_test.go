@@ -6,9 +6,7 @@ import (
 
 
 func TestEncryptDecrypt(t *testing.T) {
-	key := "0123456789abcdef0123456789abcdef" // 32-char hex = 16 bytes, but we need 32 bytes
-	// Let's use a proper 32 byte key
-	key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 hex chars = 32 bytes
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 hex chars = 32 bytes
 
 	tests := []struct {
 		name string
