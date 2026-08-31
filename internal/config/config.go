@@ -20,6 +20,9 @@ type Config struct{
 
 	// Logging
 	LogLevel		string
+
+	// Encryption
+	EncryptionKey	string
 }
 
 func Load() (*Config, error) {
@@ -32,6 +35,7 @@ func Load() (*Config, error) {
 		DatabaseURL:	getEnv("DATABASE_URL", "postgres://blink:devpass@localhost:5432/blink_db"),
 		RedisURL:		getEnv("REDIS_URL", "redis://localhost:6379"),
 		LogLevel:		getEnv("LOG_LEVEL", "info"),
+		EncryptionKey: 	getEnv("ENCRYPTION_KEY", ""),
 	}, nil
 }
 
