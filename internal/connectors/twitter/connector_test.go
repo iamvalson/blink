@@ -71,7 +71,7 @@ func TestGetStatus(t *testing.T) {
 		t.Fatalf("Expected status 'published', got %s", status)
 	}
 
-	if url != "https://twitter.com/i/web/status/12345" {
+	if url != "https://x.com/i/web/status/12345" {
 		t.Fatalf("Expected a valid URL, got %s", url)
 	}
 }

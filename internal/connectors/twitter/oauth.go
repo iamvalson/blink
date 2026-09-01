@@ -18,8 +18,8 @@ func NewOAuthConfig(cfg TwitterConfig) *oauth2.Config {
 		RedirectURL: 	cfg.CallbackURL,
 		Scopes:	 		[]string{"tweet.read", "tweet.write", "users.read"},
 		Endpoint: 		oauth2.Endpoint{
-			AuthURL: "https://twitter.com/i/oauth2/authorize",
-			TokenURL: "https://twitter.com/2/oauth2/token",
+			AuthURL: "https://x.com/i/oauth2/authorize",
+			TokenURL: "https://api.x.com/2/oauth2/token",
 		},	
 	}
 }
@@ -44,7 +44,7 @@ func ExchangeCodeForToken(ctx context.Context, oauthConfig *oauth2.Config, code 
 // GetUserInfo fetches authenticated user's info
 func GetUserInfo(ctx context.Context, token *oauth2.Token) (*TwitterUserInfo, error) {
 	client := &http.Client{}
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.twitter.com/2/user/me", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.x.com/2/user/me", nil)
 	if err != nil{
 		return nil, err
 	}

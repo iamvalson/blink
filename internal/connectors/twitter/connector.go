@@ -88,7 +88,7 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 	req, err := http.NewRequestWithContext(
 		ctx,
 		"POST",
-		"https://api.twitter.com/2/tweets",
+		"https://api.x.com/2/tweets",
 		bytes.NewReader(payloadBytes),
 	)
 	if err != nil {
@@ -114,7 +114,7 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("twitter api error: %d %s", resp.StatusCode, string(body))
+		return "", "", fmt.Errorf("x api error: %d %s", resp.StatusCode, string(body))
 	}
 
 
@@ -127,7 +127,7 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 
 
 	// Format public URL
-	publicURL = fmt.Sprintf("https://twitter.com/i/web/status/%s", tweetResp.Data.ID)
+	publicURL = fmt.Sprintf("https://x.com/i/web/status/%s", tweetResp.Data.ID)
 
 	return publicURL, tweetResp.Data.ID, nil
 }
@@ -135,6 +135,6 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 
 // GetStatus checks tweet status
 func (c *Connector) GetStatus(ctx context.Context, platformPostID string) (status string, publicURL string, err error) {
-	publicURL = fmt.Sprintf("https://twitter.com/i/web/status/%s", platformPostID)
+	publicURL = fmt.Sprintf("https://x.com/i/web/status/%s", platformPostID)
 	return "published", publicURL, nil
 }
