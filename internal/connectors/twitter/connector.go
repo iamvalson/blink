@@ -75,7 +75,7 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 
 	// Add media if provided
 	if len(mediaIDs) > 0{
-		// TODO
+		fmt.Print("Todo")
 	}
 
 	payloadBytes, err := json.Marshal(payload)
