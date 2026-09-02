@@ -27,7 +27,11 @@ func NewAuthHandler(tc *twitter.Connector) *AuthHandler {
 // TwitterAuth redirects user to Twitter OAuth
 func (h *AuthHandler) TwitterAuth(w http.ResponseWriter, r *http.Request) {
 	// Generate random state for CSRF protection
-	state := generateRandomState()
+	state, err := generateRandomState()
+	if err != nil {
+		http.Error(w, "Unable to start authentication", http.StatusInternalServerError)
+		return
+	}
 	verifier := oauth2.GenerateVerifier()
 	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	h.transactionsMu.Lock()
@@ -97,11 +101,15 @@ func (h *AuthHandler) TwitterCallback(w http.ResponseWriter, r *http.Request) {
 	// TODO: Redirect to dashboard
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Authentication successful! Redirect to dashboard..."))
+	if _, err := w.Write([]byte("Authentication successful! Redirect to dashboard...")); err != nil {
+		log.Error().Err(err).Msg("Failed to write authentication response")
+	}
 }
 
-func generateRandomState() string {
+func generateRandomState() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }

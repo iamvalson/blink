@@ -15,9 +15,11 @@ func ErrorHandler(next http.Handler) http.Handler {
 				log.Error().Interface("panic", err).Msg("Request panic")
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string {
+				if err := json.NewEncoder(w).Encode(map[string]string{
 					"error": "Internal server error",
-				})
+				}); err != nil {
+					log.Error().Err(err).Msg("Failed to encode panic response")
+				}
 			}
 		} ()
 		next.ServeHTTP(w, r)

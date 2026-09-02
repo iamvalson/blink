@@ -5,6 +5,10 @@ import (
 	"net/http"
 )
 
+type contextKey string
+
+const userIDKey contextKey = "user_id"
+
 // RequireAuth checks if user is authenticated
 func RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -13,7 +17,7 @@ func RequireAuth(next http.Handler) http.Handler {
 
 		userID := "user_123"
 
-		ctx := context.WithValue(r.Context(), "user_id", userID)
+		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
