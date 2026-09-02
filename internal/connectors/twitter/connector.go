@@ -12,36 +12,30 @@ import (
 	"golang.org/x/oauth2"
 )
 
-
-
 type Connector struct {
 	oauthConfig *oauth2.Config
-	accessToken	string
+	accessToken string
 }
 
-
 // New creates a new Twwitter connector
-func New(cfg TwitterConfig) *Connector{
+func New(cfg TwitterConfig) *Connector {
 	return &Connector{
 		oauthConfig: NewOAuthConfig(cfg),
 	}
 }
-
 
 // SetAccessToken sets the user's OAuth token
 func (c *Connector) SetAccessToken(token string) {
 	c.accessToken = token
 }
 
-
 // Authenticate exchanges auth code for tokens and returns user ID
-func (c *Connector) Authenticate(ctx context.Context, code string) (platformUserID string, err error) {
+func (c *Connector) Authenticate(ctx context.Context, code, verifier string) (platformUserID string, err error) {
 	// Exchange code for token
-	token, err := ExchangeCodeForToken(ctx, c.oauthConfig, code)
-	if err != nil{
+	token, err := ExchangeCodeForToken(ctx, c.oauthConfig, code, verifier)
+	if err != nil {
 		return "", fmt.Errorf("oauth exchange failed: %w", err)
 	}
-
 
 	// Get user info
 	userInfo, err := GetUserInfo(ctx, token)
@@ -55,12 +49,10 @@ func (c *Connector) Authenticate(ctx context.Context, code string) (platformUser
 	return userInfo.ID, nil
 }
 
-
 // UploadMedia uploads media to Twitter and returns media ID
 func (c *Connector) UploadMedia(ctx context.Context, media io.Reader, mediaType string) (mediaID string, err error) {
 	return "media_placeholder", nil
 }
-
 
 // Publish posts a tweet
 func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error) {
@@ -69,20 +61,19 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 	}
 
 	// Build tweet payload
-	payload := map[string]string {
+	payload := map[string]string{
 		"text": caption,
 	}
 
 	// Add media if provided
-	if len(mediaIDs) > 0{
+	if len(mediaIDs) > 0 {
 		fmt.Print("Todo")
 	}
 
 	payloadBytes, err := json.Marshal(payload)
-	if err != nil{
+	if err != nil {
 		return "", "", err
 	}
-
 
 	// Create request
 	req, err := http.NewRequestWithContext(
@@ -106,7 +97,6 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 	}
 	defer resp.Body.Close()
 
-
 	// Check for rate limit
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return "", "", connectors.ErrRateLimited
@@ -117,14 +107,11 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 		return "", "", fmt.Errorf("x api error: %d %s", resp.StatusCode, string(body))
 	}
 
-
-
 	// Paarse response
 	var tweetResp TweetResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tweetResp); err != nil {
 		return "", "", fmt.Errorf("failed to parse tweet response: %w", err)
 	}
-
 
 	// Format public URL
 	publicURL = fmt.Sprintf("https://x.com/i/web/status/%s", tweetResp.Data.ID)
@@ -132,9 +119,13 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 	return publicURL, tweetResp.Data.ID, nil
 }
 
-
 // GetStatus checks tweet status
 func (c *Connector) GetStatus(ctx context.Context, platformPostID string) (status string, publicURL string, err error) {
 	publicURL = fmt.Sprintf("https://x.com/i/web/status/%s", platformPostID)
 	return "published", publicURL, nil
+}
+
+// GetOAuthConfig returns the OAuth config (needed by AuthHandler)
+func (c *Connector) GetOAuthConfig() *oauth2.Config {
+	return c.oauthConfig
 }

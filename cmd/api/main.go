@@ -1,15 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-
+	"github.com/iamvalson/blink/internal/api"
 	"github.com/iamvalson/blink/internal/config"
+	"github.com/iamvalson/blink/internal/connectors/twitter"
 	applog "github.com/iamvalson/blink/internal/log"
 
 	zlog "github.com/rs/zerolog/log"
@@ -28,21 +26,24 @@ func main() {
 
 	zlog.Info().Str("env", cfg.Env).Int("port", cfg.Port).Msg("Starting API server")
 
+
+	// Initialize Twitter connector
+	twitterCfg := twitter.TwitterConfig{
+		ClientID:			os.Getenv("TWITTER_CLIENT_ID"),
+		ClientSecret:		os.Getenv("TWITTER_CLIENT_SECRET"),
+		CallbackURL:		os.Getenv("TWITTER_CALLBACK_URL"),
+	}
+	twitterConnector := twitter.New(twitterCfg)
+
 	// Router Setup
-	r := chi.NewRouter()
-
-	r.Use(middleware.RequestID,
-    middleware.Logger,
-    middleware.Recoverer,)
-
-	r.Get("/health", healthHandler)
+	router := api.NewRouter(twitterConnector)
 	
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)
 
 	server := &http.Server{
 		Addr: addr,
-		Handler: r,
+		Handler: router,
 	}
 
 	zlog.Info().Str("addr", addr).Msg("HTTP server listening")
@@ -50,19 +51,4 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		applog.Fatal(err, "Server crashed")
 	}
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	// Set Content-Type, Set data, Encode to JSON
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	respone := map[string]string {
-		"status":"ok",
-	}
-
-	if err := json.NewEncoder(w).Encode(respone); err != nil {
-		zlog.Error().Err(err).Msg("failed to encode health response")
-	}
-	zlog.Debug().Msg("Health check passed")
 }
