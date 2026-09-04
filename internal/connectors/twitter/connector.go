@@ -30,9 +30,9 @@ func (c *Connector) SetAccessToken(token string) {
 }
 
 // Authenticate exchanges auth code for tokens and returns user ID
-func (c *Connector) Authenticate(ctx context.Context, code, verifier string) (platformUserID string, err error) {
+func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthParams) (platformUserID string, err error) {
 	// Exchange code for token
-	token, err := ExchangeCodeForToken(ctx, c.oauthConfig, code, verifier)
+	token, err := ExchangeCodeForToken(ctx, c.oauthConfig, params.Code, params.CodeVerifier)
 	if err != nil {
 		return "", fmt.Errorf("oauth exchange failed: %w", err)
 	}

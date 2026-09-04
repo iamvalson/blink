@@ -9,7 +9,9 @@ import (
 func TestMockConnectorAuthenticate(t *testing.T) {
 	mock := NewMockConnector()
 
-	userID, err := mock.Authenticate(context.Background(), "auth_code_123")
+	userID, err := mock.Authenticate(context.Background(), AuthParams{
+		Code: "auth_code_123",
+	})
 	if err != nil{
 		t.Fatalf("Authenticate failed: %v", err)
 	}

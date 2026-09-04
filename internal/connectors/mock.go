@@ -7,15 +7,15 @@ import (
 
 // MockConnector is a test double for PlatformConnector
 type MockConnector struct {
-	AuthenticateFn func(ctx context.Context, code string) (string, error)
+	AuthenticateFn func(ctx context.Context, params AuthParams) (string, error)
 	UploadMediaFn  func(ctx context.Context, media io.Reader, mediaType string) (string, error)
 	PublishFn      func(ctx context.Context, caption string, mediaIDs ...string) (string, string, error)
 	GetStatusFn    func(ctx context.Context, platformPostID string) (string, string, error)
 }
 
 
-func (m *MockConnector) Authenticate(ctx context.Context, code string) (string, error) {
-	return m.AuthenticateFn(ctx, code)
+func (m *MockConnector) Authenticate(ctx context.Context, params AuthParams) (string, error) {
+	return m.AuthenticateFn(ctx, params)
 }
 
 func (m *MockConnector) UploadMedia(ctx context.Context, media io.Reader, mediaType string) (string, error) {
@@ -33,7 +33,7 @@ func (m *MockConnector) GetStatus(ctx context.Context, platformPostID string) (s
 // NewMockConnector creates a mock with default no-op implementations.
 func NewMockConnector() *MockConnector {
 	return &MockConnector{
-		AuthenticateFn: func(ctx context.Context, code string) (string, error) {
+		AuthenticateFn: func(ctx context.Context, params AuthParams) (string, error) {
 			return "mock_user_123", nil
 		},
 		UploadMediaFn: func(ctx context.Context, media io.Reader, mediaType string) (string, error) {

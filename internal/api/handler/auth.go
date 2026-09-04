@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/oauth2"
@@ -86,7 +87,10 @@ func (h *AuthHandler) TwitterCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange code for token
-	platformUserID, err := h.twitterConnector.Authenticate(r.Context(), code, verifier)
+	platformUserID, err := h.twitterConnector.Authenticate(r.Context(), connectors.AuthParams{
+		Code: code,
+		CodeVerifier: verifier,
+	})
 	if err != nil {
 		log.Error().Err(err).Msg("Twitter authentication failed")
 		http.Error(w, "Authentication failed", http.StatusInternalServerError)

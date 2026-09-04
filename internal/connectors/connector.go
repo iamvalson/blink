@@ -11,7 +11,7 @@ import (
 type PlatformConnector interface {
 	// Authenticate exchanges an OAuth auth code for tokens
 	// Which are encryted and stored in db
-	Authenticate(ctx context.Context, code string) (platformUserID string, err error)
+	Authenticate(ctx context.Context, params AuthParams) (platformUserID string, err error)
 
 
 	// UploadMedia uploads media to the platform and return a URL/ID
