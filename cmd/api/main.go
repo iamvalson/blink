@@ -1,12 +1,16 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
 
 	"github.com/iamvalson/blink/internal/api"
+	"github.com/iamvalson/blink/internal/api/service"
+	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	applog "github.com/iamvalson/blink/internal/log"
@@ -29,12 +33,11 @@ func main() {
 
 	zlog.Info().Str("env", cfg.Env).Int("port", cfg.Port).Msg("Starting API server")
 
-
 	// Initialize Twitter connector
 	twitterCfg := twitter.TwitterConfig{
-		ClientID:			os.Getenv("TWITTER_CLIENT_ID"),
-		ClientSecret:		os.Getenv("TWITTER_CLIENT_SECRET"),
-		CallbackURL:		os.Getenv("TWITTER_CALLBACK_URL"),
+		ClientID:     os.Getenv("TWITTER_CLIENT_ID"),
+		ClientSecret: os.Getenv("TWITTER_CLIENT_SECRET"),
+		CallbackURL:  os.Getenv("TWITTER_CALLBACK_URL"),
 	}
 	twitterConnector := twitter.New(twitterCfg)
 
@@ -44,15 +47,24 @@ func main() {
 	}
 	defer db.Close()
 	accounts := storage.NewSocialAccountRepository(db)
+	users := storage.NewUserRepository(db)
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		applog.Fatal(err, "Failed to generate JWT keys")
+	}
+	jwtService := auth.NewJWTService(privateKey, publicKey)
+	signupService := service.NewSignupService(users, jwtService)
+	loginService := service.NewLoginService(users, jwtService)
 
 	// Router Setup
-	router := api.NewRouter(twitterConnector, accounts, cfg.EncryptionKey)
-	
+	router := api.NewRouter(twitterConnector, accounts, cfg.EncryptionKey, signupService, loginService, jwtService)
+
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)
 
 	server := &http.Server{
-		Addr: addr,
+		Addr:    addr,
 		Handler: router,
 	}
 
