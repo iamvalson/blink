@@ -12,15 +12,14 @@ func TestMockConnectorAuthenticate(t *testing.T) {
 	userID, err := mock.Authenticate(context.Background(), AuthParams{
 		Code: "auth_code_123",
 	})
-	if err != nil{
+	if err != nil {
 		t.Fatalf("Authenticate failed: %v", err)
 	}
 
-	if userID != "mock_user_123" {
-		t.Fatalf("Expected mock_user_123 got %s", userID)
+	if userID.PlatformUserID != "mock_user_123" {
+		t.Fatalf("Expected mock_user_123 got %s", userID.PlatformUserID)
 	}
 }
-
 
 func TestMockConnectorPublish(t *testing.T) {
 	mock := NewMockConnector()
@@ -40,7 +39,6 @@ func TestMockConnectorPublish(t *testing.T) {
 	}
 }
 
-
 func TestMockConnectorUploadMedia(t *testing.T) {
 	mock := NewMockConnector()
 
@@ -48,19 +46,17 @@ func TestMockConnectorUploadMedia(t *testing.T) {
 
 	mediaID, err := mock.UploadMedia(context.Background(), media, "image/png")
 
-	if err != nil{
+	if err != nil {
 		t.Fatalf("UploadMedia failed: %v", err)
 	}
 
-	if mediaID != "mock_media_123"{
+	if mediaID != "mock_media_123" {
 		t.Fatalf("Expected mock_media_123 got %s", mediaID)
 	}
 }
 
-
 func TestMockConnectorCustomBehaviour(t *testing.T) {
 	mock := NewMockConnector()
-
 
 	// Override behaviour for this test
 	mock.PublishFn = func(ctx context.Context, caption string, mediaIDs ...string) (string, string, error) {

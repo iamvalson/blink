@@ -21,10 +21,13 @@ func TestTwitterAuthSetsSecureOAuthCookiesBehindTLSProxy(t *testing.T) {
 	handler.TwitterAuth(recorder, req)
 
 	cookies := recorder.Result().Cookies()
-	if len(cookies) != 2 {
-		t.Fatalf("expected state and verifier cookies, got %d", len(cookies))
+	if len(cookies) != 1 {
+		t.Fatalf("expected state cookie, got %d", len(cookies))
 	}
 	for _, cookie := range cookies {
+		if cookie.Name != "oauth_state" {
+			t.Fatalf("expected oauth_state cookie, got %q", cookie.Name)
+		}
 		if cookie.Value == "" {
 			t.Fatalf("cookie %q has an empty value", cookie.Name)
 		}

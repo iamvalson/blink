@@ -11,25 +11,23 @@ import (
 type PlatformConnector interface {
 	// Authenticate exchanges an OAuth auth code for tokens
 	// Which are encryted and stored in db
-	Authenticate(ctx context.Context, params AuthParams) (AuthResult, err error)
-
+	Authenticate(ctx context.Context, params AuthParams) (result AuthResult, err error)
 
 	// UploadMedia uploads media to the platform and return a URL/ID
 	// For Twitter (X), it uploads via v2 API
 	// For Youtube, this queues video upload
 	UploadMedia(ctx context.Context, media io.Reader, mediaType string) (mediaId string, err error)
 
-
 	// Publish post content to the platform
 	// Returns the public URL and platform-specific post ID
 	Publish(ctx context.Context, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error)
-
 
 	// GetStatus polls the platform for post status
 	// Used for async publishing (eg. Youtube video processing)
 	GetStatus(ctx context.Context, platformPostID string) (status string, publicURL string, err error)
 }
 
+var _ PlatformConnector = (*MockConnector)(nil)
 
 // Platform Constants
 const (

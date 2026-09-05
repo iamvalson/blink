@@ -17,6 +17,8 @@ type Connector struct {
 	accessToken string
 }
 
+var _ connectors.PlatformConnector = (*Connector)(nil)
+
 // New creates a new Twwitter connector
 func New(cfg TwitterConfig) *Connector {
 	return &Connector{
@@ -48,9 +50,9 @@ func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthPara
 
 	return connectors.AuthResult{
 		PlatformUserID: userInfo.ID,
-		AccessToken: token.AccessToken,
-		RefreshToken: token.RefreshToken,
-		Expiry: token.Expiry,
+		AccessToken:    token.AccessToken,
+		RefreshToken:   token.RefreshToken,
+		Expiry:         token.Expiry,
 	}, nil
 }
 
