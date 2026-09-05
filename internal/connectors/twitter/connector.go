@@ -30,23 +30,28 @@ func (c *Connector) SetAccessToken(token string) {
 }
 
 // Authenticate exchanges auth code for tokens and returns user ID
-func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthParams) (platformUserID string, err error) {
+func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthParams) (result connectors.AuthResult, err error) {
 	// Exchange code for token
 	token, err := ExchangeCodeForToken(ctx, c.oauthConfig, params.Code, params.CodeVerifier)
 	if err != nil {
-		return "", fmt.Errorf("oauth exchange failed: %w", err)
+		return connectors.AuthResult{}, fmt.Errorf("oauth exchange failed: %w", err)
 	}
 
 	// Get user info
 	userInfo, err := GetUserInfo(ctx, token)
 	if err != nil {
-		return "", fmt.Errorf("failed to get user info: %w", err)
+		return connectors.AuthResult{}, fmt.Errorf("failed to get user info: %w", err)
 	}
 
 	// Store token for later use (caller will encrypt and save to DB)
 	c.accessToken = token.AccessToken
 
-	return userInfo.ID, nil
+	return connectors.AuthResult{
+		PlatformUserID: userInfo.ID,
+		AccessToken: token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		Expiry: token.Expiry,
+	}, nil
 }
 
 // UploadMedia uploads media to Twitter and returns media ID

@@ -13,7 +13,7 @@ func TestTwitterAuthSetsSecureOAuthCookiesBehindTLSProxy(t *testing.T) {
 		ClientID:    "test-client",
 		CallbackURL: "https://example.com/auth/twitter/callback",
 	})
-	handler := NewAuthHandler(connector)
+	handler := NewAuthHandler(connector, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/auth/twitter", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	recorder := httptest.NewRecorder()

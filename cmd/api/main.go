@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	applog "github.com/iamvalson/blink/internal/log"
+	"github.com/iamvalson/blink/internal/storage"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	zlog "github.com/rs/zerolog/log"
 )
@@ -35,8 +38,15 @@ func main() {
 	}
 	twitterConnector := twitter.New(twitterCfg)
 
+	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	if err != nil {
+		applog.Fatal(err, "Failed to open database")
+	}
+	defer db.Close()
+	accounts := storage.NewSocialAccountRepository(db)
+
 	// Router Setup
-	router := api.NewRouter(twitterConnector)
+	router := api.NewRouter(twitterConnector, accounts, cfg.EncryptionKey)
 	
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)
