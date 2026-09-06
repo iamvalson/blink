@@ -1,3 +1,6 @@
+include .env
+export
+
 .PHONY: up down logs run-api setup clean migrate-up migrate-down migrate-create
 
 up:
