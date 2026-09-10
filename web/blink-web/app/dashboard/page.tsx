@@ -1,15 +1,21 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 function DashboardContent() {
-  const router = useRouter();
   const params = useSearchParams();
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/login");
+    const response = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      window.location.replace("/login");
+    }
   }
 
   return (
@@ -28,7 +34,7 @@ function DashboardContent() {
           Connect Twitter
         </a>
 
-        <button className="button" onClick={logout}>
+        <button className="button" onClick={logout} type="button">
           Sign out
         </button>
       </section>
