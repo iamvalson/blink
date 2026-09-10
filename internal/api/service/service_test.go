@@ -156,14 +156,13 @@ func TestLoginRejectsInvalidCredentials(t *testing.T) {
 	passwordHash, err := auth.HashPassword("strong-password")
 	if err != nil {
 		t.Fatalf("HashPassword failed: %v", err)
-	}
+	}	
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash FROM users WHERE email = $1")).
 		WithArgs("person@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "display_name", "password_hash"}).AddRow(
 			"user-123", "person@example.com", "Person", passwordHash,
 		))
-
 	service := NewLoginService(users, jwtService)
 	_, err = service.Login(context.Background(), LoginInput{
 		Email:    "person@example.com",
