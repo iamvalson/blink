@@ -25,17 +25,43 @@ CREATE TABLE posts (
     caption TEXT,
     media_url VARCHAR(2048),
     media_type VARCHAR(50),
-    status VARCHAR(50) DEFAULT 'DRAFT',
+    status VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT posts_status_check CHECK (status IN (
+        'DRAFT',
+        'QUEUED',
+        'PUBLISHING',
+        'PUBLISHED',
+        'PARTIALLY_PUBLISHED',
+        'FAILED',
+        'CANCELLED'
+    ))
 );
 
 CREATE TABLE post_targets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    social_account_id UUID NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
-    status VARCHAR(50) DEFAULT 'PENDING',
+
+    post_id UUID NOT NULL
+        REFERENCES posts(id) ON DELETE CASCADE,
+
+    social_account_id UUID NOT NULL
+        REFERENCES social_accounts(id) ON DELETE CASCADE,
+
+    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT post_targets_status_check CHECK (
+        status IN (
+            'PENDING',
+            'PUBLISHING',
+            'PUBLISHED',
+            'FAILED',
+            'CANCELLED'
+        )
+    ),
 
     UNIQUE(post_id, social_account_id)
 );
@@ -193,6 +219,9 @@ CREATE INDEX idx_publish_results_post_target_id
 ON publish_results(post_target_id);
 
 CREATE INDEX idx_publish_results_publication_attempt_id
+ON publish_results(publication_attempt_id);
+
+CREATE UNIQUE INDEX idx_publish_results_attempt_unique
 ON publish_results(publication_attempt_id);
 
 CREATE INDEX idx_outbox_events_pending
