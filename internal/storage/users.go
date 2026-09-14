@@ -2,9 +2,10 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 var (
@@ -20,10 +21,14 @@ type User struct {
 }
 
 type UserRepository struct {
-	db *sql.DB
+	db userDB
 }
 
-func NewUserRepository(db *sql.DB) *UserRepository {
+type userDB interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func NewUserRepository(db userDB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
@@ -43,14 +48,13 @@ func (r *UserRepository) Create(
 
 	var userID string
 
-	err := r.db.QueryRowContext(ctx, query, user.Email, user.DisplayName, user.PasswordHash).Scan(&userID)
+	err := r.db.QueryRow(ctx, query, user.Email, user.DisplayName, user.PasswordHash).Scan(&userID)
 
 	if err != nil {
 		return "", fmt.Errorf("create user: %w", err)
 	}
 
 	return userID, nil
-
 }
 
 func (r *UserRepository) GetByEmail(
@@ -63,9 +67,9 @@ func (r *UserRepository) GetByEmail(
 
 	var user User
 
-	err := r.db.QueryRowContext(ctx, query, email).Scan(&user.ID, &user.Email, &user.DisplayName, &user.PasswordHash)
+	err := r.db.QueryRow(ctx, query, email).Scan(&user.ID, &user.Email, &user.DisplayName, &user.PasswordHash)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
 		}
 

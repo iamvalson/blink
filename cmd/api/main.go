@@ -1,9 +1,9 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,7 +15,7 @@ import (
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	applog "github.com/iamvalson/blink/internal/log"
 	"github.com/iamvalson/blink/internal/storage"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	zlog "github.com/rs/zerolog/log"
 )
@@ -41,11 +41,14 @@ func main() {
 	}
 	twitterConnector := twitter.New(twitterCfg)
 
-	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		applog.Fatal(err, "Failed to open database")
 	}
 	defer db.Close()
+	if err := db.Ping(context.Background()); err != nil {
+    applog.Fatal(err, "Failed to connect to database")
+}
 	accounts := storage.NewSocialAccountRepository(db)
 	users := storage.NewUserRepository(db)
 

@@ -2,9 +2,10 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type SocialPlatform string
@@ -15,11 +16,11 @@ const (
 
 
 type SocialAccountRepository struct {
-	db *sql.DB
+	db *pgxpool.Pool
 }
 
 
-func NewSocialAccountRepository(db *sql.DB) *SocialAccountRepository {
+func NewSocialAccountRepository(db *pgxpool.Pool) *SocialAccountRepository {
 	return &SocialAccountRepository{db: db}
 }
 
@@ -50,7 +51,7 @@ func (r *SocialAccountRepository) Upsert(
 			refresh_token = COALESCE(EXCLUDED.refresh_token, social_accounts.refresh_token),
 			expires_at = EXCLUDED.expires_at
 	`
-	_, err := r.db.ExecContext(ctx, query, userID, platform, platformUserID, accessToken, refreshToken, expiresAt)
+	_, err := r.db.Exec(ctx, query, userID, platform, platformUserID, accessToken, refreshToken, expiresAt)
 
 	if err != nil {
 		return fmt.Errorf("upsert social account: %w", err)
