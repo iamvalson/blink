@@ -24,7 +24,7 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-        
+
       redis:
         image: redis:7
         options: >-
@@ -32,45 +32,43 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        
+
         ports:
           - 6379:6379
-    
+
     steps:
-    - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
-    - name: Set up Go
-      uses: actions/setup-go@v7
-      with:
-        go-version: '1.26.0'
-      
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-      
-    - name: Download dependencies
-      run: go mod download
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.0"
 
-    - name: Format check
-      run: go fmt ./...
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
-    - name: Install golangci-lint
-      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - name: Download dependencies
+        run: go mod download
 
-    - name: Lint
-      run: golangci-lint run ./...
+      - name: Format check
+        run: go fmt ./...
 
-    - name: Run tests
-      env:
-        DATABASE_URL: postgres://blink:devpass@localhost:5432/blink_db
-        REDIS_URL: redis://localhost:6379
-      run: go test -v -race ./...
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
-    - name: Build
-      run: go build -o bin/api cmd/api/main.go
+      - name: Lint
+        run: golangci-lint run ./...
 
+      - name: Run tests
+        env:
+          DATABASE_URL: postgres://blink:devpass@localhost:5432/blink_db
+          REDIS_URL: redis://localhost:6379
+        run: go test -v -race ./...
 
+      - name: Build
+        run: go build -o bin/api cmd/api/main.go
