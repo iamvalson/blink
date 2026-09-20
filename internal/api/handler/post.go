@@ -76,5 +76,7 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
     // Return 202 Accepted
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(http.StatusAccepted)
-    json.NewEncoder(w).Encode(post)
+    if err := json.NewEncoder(w).Encode(post); err != nil {
+        log.Error().Err(err).Msg("Failed to encode post response")
+    }
 }

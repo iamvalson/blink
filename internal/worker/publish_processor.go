@@ -136,9 +136,11 @@ func (p *PublishProcessor) publishToTarget(
 
     accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
     if err != nil {
-    p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error())
-    return fmt.Errorf("decrypt access token: %w", err)
-}
+        if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
+            log.Error().Err(markErr).Msg("Failed to mark attempt failed")
+        }
+        return fmt.Errorf("decrypt access token: %w", err)
+    }
 
     // Get connector for platform
     connector, ok := p.connectors[account.Platform]

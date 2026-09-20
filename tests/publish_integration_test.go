@@ -51,7 +51,9 @@ func TestPublishPipelineIntegrationWithMockConnector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to insert test user: %v", err)
 	}
-	defer db.Exec(ctx, `DELETE FROM users WHERE id = $1`, testUserID)
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM users WHERE id = $1`, testUserID)
+	}()
 
 	// 2. Create a test social account for Twitter with encrypted access token
 	encryptedToken, err := auth.EncryptToken("integration_oauth_token", encryptionKey)

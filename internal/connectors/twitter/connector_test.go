@@ -89,7 +89,7 @@ func TestPublishSuccessWithMockServer(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"data":{"id":"192837465","text":"Hello World"}}`))
+		_, _ = w.Write([]byte(`{"data":{"id":"192837465","text":"Hello World"}}`))
 	}))
 	defer server.Close()
 
@@ -133,7 +133,7 @@ func TestPublishRateLimitedWithMockServer(t *testing.T) {
 func TestPublishAPIErrorWithMockServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPaymentRequired)
-		w.Write([]byte(`{"detail":"credits depleted"}`))
+		_, _ = w.Write([]byte(`{"detail":"credits depleted"}`))
 	}))
 	defer server.Close()
 
