@@ -20,7 +20,7 @@ type PlatformConnector interface {
 
 	// Publish post content to the platform
 	// Returns the public URL and platform-specific post ID
-	Publish(ctx context.Context, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error)
+	Publish(ctx context.Context, token string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error)
 
 	// GetStatus polls the platform for post status
 	// Used for async publishing (eg. Youtube video processing)

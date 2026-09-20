@@ -23,6 +23,9 @@ type Config struct{
 
 	// Encryption
 	EncryptionKey	string
+
+	// Platform Mode (real, mock)
+	PlatformMode	string
 }
 
 func Load() (*Config, error) {
@@ -36,6 +39,7 @@ func Load() (*Config, error) {
 		RedisURL:		getEnv("REDIS_URL", "redis://localhost:6379"),
 		LogLevel:		getEnv("LOG_LEVEL", "info"),
 		EncryptionKey: 	getEnv("ENCRYPTION_KEY", ""),
+		PlatformMode:	getEnv("PLATFORM_MODE", "real"),
 	}, nil
 }
 
