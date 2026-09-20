@@ -14,9 +14,10 @@ import (
 func NewRouter(
 	twitterConnector *twitter.Connector,
 	accounts *storage.SocialAccountRepository,
+	posts *storage.PostRepository,
 	encryptionKey string,
 	signupService *service.SignupService,
-	loginService *service.LoginService,
+	loginService *service.LoginService, 
 	jwtService *auth.JWTService,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -46,6 +47,13 @@ func NewRouter(
 	r.With(middleware.RequireAuth(jwtService)).Get("/auth/twitter", authHandler.TwitterAuth)
 
 	r.With(middleware.RequireAuth(jwtService)).Get("/auth/twitter/callback", authHandler.TwitterCallback)
+
+
+	// Post Handler
+	postService := service.NewPostService(posts)
+	postHandler := handler.NewPostHandler(postService)
+
+	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts", postHandler.CreatePost)
 
 	return r
 }

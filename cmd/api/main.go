@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/iamvalson/blink/internal/api"
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
+	"github.com/iamvalson/blink/internal/jobs"
 	applog "github.com/iamvalson/blink/internal/log"
+	"github.com/iamvalson/blink/internal/outbox"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -51,6 +54,8 @@ func main() {
 }
 	accounts := storage.NewSocialAccountRepository(db)
 	users := storage.NewUserRepository(db)
+	posts := storage.NewPostRepository(db)
+	outboxRepo := storage.NewOutboxRepository(db)
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -60,8 +65,39 @@ func main() {
 	signupService := service.NewSignupService(users, jwtService)
 	loginService := service.NewLoginService(users, jwtService)
 
+	// Initialize Redis for Asynq job queue
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "localhost:6379"
+	}
+
+	jobsClient, err := jobs.NewClient(redisURL)
+	if err != nil {
+		applog.Fatal(err, "Failed to create Asynq client")
+	}
+	defer jobsClient.Close()
+
+	// Initialize outbox dispatcher
+	dispatcher := outbox.NewDispatcher(outboxRepo, jobsClient)
+
+	// Start outbox dispatcher in background (runs every 5 seconds)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := dispatcher.ProcessPendingEvents(ctx); err != nil {
+				zlog.Error().Err(err).Msg("Failed to process pending events")
+			}
+			cancel()
+		}
+	}()
+
+	zlog.Info().Msg("Outbox dispatcher started")
+
 	// Router Setup
-	router := api.NewRouter(twitterConnector, accounts, cfg.EncryptionKey, signupService, loginService, jwtService)
+	router := api.NewRouter(twitterConnector, accounts, posts, cfg.EncryptionKey, signupService, loginService, jwtService)
 
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)
