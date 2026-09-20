@@ -15,6 +15,8 @@ import (
 type Connector struct {
 	oauthConfig *oauth2.Config
 	accessToken string
+	baseURL     string
+	httpClient  *http.Client
 }
 
 var _ connectors.PlatformConnector = (*Connector)(nil)
@@ -62,8 +64,8 @@ func (c *Connector) UploadMedia(ctx context.Context, media io.Reader, mediaType 
 }
 
 // Publish posts a tweet
-func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error) {
-	if c.accessToken == "" {
+func (c *Connector) Publish(ctx context.Context, token string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error) {
+	if token == "" {
 		return "", "", fmt.Errorf("no access token set")
 	}
 
@@ -82,22 +84,30 @@ func (c *Connector) Publish(ctx context.Context, caption string, mediaIDs ...str
 		return "", "", err
 	}
 
+	endpoint := c.baseURL
+	if endpoint == "" {
+		endpoint = "https://api.x.com/2/tweets"
+	}
+
 	// Create request
 	req, err := http.NewRequestWithContext(
 		ctx,
 		"POST",
-		"https://api.x.com/2/tweets",
+		endpoint,
 		bytes.NewReader(payloadBytes),
 	)
 	if err != nil {
 		return "", "", err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.accessToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	req.Header.Set("Content-Type", "application/json")
 
 	// Make request
-	client := &http.Client{}
+	client := c.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to publish tweet: %w", err)

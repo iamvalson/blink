@@ -16,6 +16,11 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 	return userID, ok && userID != ""
 }
 
+// ContextWithUserID sets the userID in the context.
+func ContextWithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
+
 // RequireAuth checks if user is authenticated.
 func RequireAuth(jwtService *auth.JWTService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
