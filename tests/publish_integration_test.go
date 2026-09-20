@@ -41,6 +41,32 @@ func TestPublishPipelineIntegrationWithMockConnector(t *testing.T) {
 		t.Skipf("database ping failed: %v; skipping", err)
 	}
 
+	// Ensure tables exist in fresh database (e.g. CI environments)
+	var usersTableExists bool
+	err = db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT FROM information_schema.tables 
+			WHERE table_name = 'users'
+		)
+	`).Scan(&usersTableExists)
+	if err != nil {
+		t.Skipf("cannot query database schema: %v; skipping", err)
+	}
+
+	if !usersTableExists {
+		migrationSQL, readErr := os.ReadFile("../migrations/000001_init_schema.up.sql")
+		if readErr != nil {
+			migrationSQL, readErr = os.ReadFile("migrations/000001_init_schema.up.sql")
+		}
+		if readErr != nil {
+			t.Fatalf("failed to read migrations file: %v", readErr)
+		}
+
+		if _, execErr := db.Exec(ctx, string(migrationSQL)); execErr != nil {
+			t.Fatalf("failed to apply migration schema: %v", execErr)
+		}
+	}
+
 	// 1. Create a test user
 	testUserID := uuid.New()
 	testEmail := "test_integration_" + testUserID.String()[:8] + "@example.com"
