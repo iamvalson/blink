@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
@@ -192,5 +193,28 @@ func TestPublishPipelineIntegrationWithMockConnector(t *testing.T) {
 	expectedPrefix := "http://mock.x.local/status/mock_x_"
 	if !strings.HasPrefix(platformURL, expectedPrefix) {
 		t.Errorf("expected platformURL to start with %q, got %q", expectedPrefix, platformURL)
+	}
+
+	// 9. Verify GetPost returns published URLs for targets
+	postService := service.NewPostService(postsRepo)
+	postDetails, err := postService.GetPost(ctx, testUserID, testPostID)
+	if err != nil {
+		t.Fatalf("failed to get post details: %v", err)
+	}
+
+	if postDetails.Status != "PUBLISHED" {
+		t.Errorf("expected postDetails.Status to be 'PUBLISHED', got %q", postDetails.Status)
+	}
+
+	if len(postDetails.Targets) != 1 {
+		t.Fatalf("expected 1 target in postDetails, got %d", len(postDetails.Targets))
+	}
+
+	targetDetail := postDetails.Targets[0]
+	if targetDetail.Platform != "twitter" {
+		t.Errorf("expected platform 'twitter', got %q", targetDetail.Platform)
+	}
+	if targetDetail.PlatformURL == nil || !strings.HasPrefix(*targetDetail.PlatformURL, expectedPrefix) {
+		t.Errorf("expected target platform URL with prefix %q, got %v", expectedPrefix, targetDetail.PlatformURL)
 	}
 }

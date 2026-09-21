@@ -16,12 +16,85 @@ import (
 
 
 
+var ErrPostNotFound = errors.New("post not found")
+
 type PostRepository struct {
 	db *pgxpool.Pool
 }
 
 func NewPostRepository(db *pgxpool.Pool) *PostRepository {
 	return &PostRepository{db: db}
+}
+
+// GetPostWithDetails retrieves a post and its publishing targets with attempt results
+func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID uuid.UUID) (*model.PostWithDetails, error) {
+	var post model.PostWithDetails
+	err := r.db.QueryRow(ctx, `
+		SELECT id, user_id, caption, media_url, media_type, status, created_at, updated_at
+		FROM posts
+		WHERE id = $1 AND user_id = $2
+	`, postID, userID).Scan(
+		&post.ID,
+		&post.UserID,
+		&post.Caption,
+		&post.MediaURL,
+		&post.MediaType,
+		&post.Status,
+		&post.CreatedAt,
+		&post.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrPostNotFound
+		}
+		return nil, fmt.Errorf("get post: %w", err)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT 
+			pt.id,
+			pt.social_account_id,
+			sa.platform,
+			sa.platform_user_id,
+			pt.status,
+			pa.platform_post_id,
+			pa.platform_url,
+			pa.error_code,
+			pa.error_message,
+			pa.completed_at
+		FROM post_targets pt
+		JOIN social_accounts sa ON sa.id = pt.social_account_id
+		LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
+		WHERE pt.post_id = $1
+		ORDER BY pt.created_at ASC
+	`, postID)
+	if err != nil {
+		return nil, fmt.Errorf("get post targets: %w", err)
+	}
+	defer rows.Close()
+
+	post.Targets = make([]model.PostTargetDetail, 0)
+	for rows.Next() {
+		var target model.PostTargetDetail
+		err := rows.Scan(
+			&target.ID,
+			&target.SocialAccountID,
+			&target.Platform,
+			&target.PlatformUserID,
+			&target.Status,
+			&target.PlatformPostID,
+			&target.PlatformURL,
+			&target.ErrorCode,
+			&target.ErrorMessage,
+			&target.PublishedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan post target: %w", err)
+		}
+		post.Targets = append(post.Targets, target)
+	}
+
+	return &post, nil
 }
 
 

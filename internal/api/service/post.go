@@ -13,6 +13,7 @@ import (
 var (
     ErrInvalidIdempotencyKey = errors.New("invalid idempotency key")
     ErrNoTargets             = errors.New("at least one target is required")
+    ErrPostNotFound          = storage.ErrPostNotFound
 )
 
 type PostService struct {
@@ -52,5 +53,17 @@ func (s *PostService) CreatePost(
         return nil, fmt.Errorf("create post: %w", err)
     }
 
+    return post, nil
+}
+
+func (s *PostService) GetPost(
+    ctx context.Context,
+    userID uuid.UUID,
+    postID uuid.UUID,
+) (*model.PostWithDetails, error) {
+    post, err := s.posts.GetPostWithDetails(ctx, userID, postID)
+    if err != nil {
+        return nil, err
+    }
     return post, nil
 }

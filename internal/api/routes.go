@@ -54,6 +54,9 @@ func NewRouter(
 	postHandler := handler.NewPostHandler(postService)
 
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts", postHandler.CreatePost)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/{id}", postHandler.GetPost)
+	r.With(middleware.RequireAuth(jwtService)).Post("/api/posts", postHandler.CreatePost)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/posts/{id}", postHandler.GetPost)
 
 	return r
 }
