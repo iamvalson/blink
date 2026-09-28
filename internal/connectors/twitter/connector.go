@@ -19,13 +19,21 @@ type Connector struct {
 	httpClient  *http.Client
 }
 
-var _ connectors.PlatformConnector = (*Connector)(nil)
+var _ connectors.OAuthConnector = (*Connector)(nil)
 
-// New creates a new Twwitter connector
+// New creates a new Twitter/X connector.
 func New(cfg TwitterConfig) *Connector {
 	return &Connector{
 		oauthConfig: NewOAuthConfig(cfg),
 	}
+}
+
+// PlatformID returns the stable slug used as route segment and storage key.
+func (c *Connector) PlatformID() string { return connectors.PlatformTwitter }
+
+// AuthCodeURL returns the URL the browser should be redirected to.
+func (c *Connector) AuthCodeURL(state, verifier string) string {
+	return GetAuthURL(c.oauthConfig, state, verifier)
 }
 
 // SetAccessToken sets the user's OAuth token

@@ -8,31 +8,32 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// SocialPlatform is a typed string for platform identifiers.
+// Use SocialPlatformTwitter etc. on the read/query side for clarity.
+// The Upsert write path accepts a plain string so callers (e.g. the generic
+// auth handler) don't need to import this package just to cast a platform slug.
 type SocialPlatform string
 
 const (
 	SocialPlatformTwitter SocialPlatform = "twitter"
 )
 
-
 type SocialAccountRepository struct {
 	db *pgxpool.Pool
 }
-
 
 func NewSocialAccountRepository(db *pgxpool.Pool) *SocialAccountRepository {
 	return &SocialAccountRepository{db: db}
 }
 
-
 func (r *SocialAccountRepository) Upsert(
 	ctx context.Context,
-	userID	string,
-	platform SocialPlatform,
-	platformUserID	string,
-	accessToken		string,
-	refreshToken	string,
-	expiresAt		time.Time,
+	userID        string,
+	platform      string, // plain string — no import of this package needed by callers
+	platformUserID string,
+	accessToken   string,
+	refreshToken  string,
+	expiresAt     time.Time,
 ) error {
 	const query = `
 		INSERT INTO social_accounts (

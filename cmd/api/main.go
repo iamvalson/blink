@@ -13,6 +13,7 @@ import (
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/config"
+	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/jobs"
 	applog "github.com/iamvalson/blink/internal/log"
@@ -50,8 +51,8 @@ func main() {
 	}
 	defer db.Close()
 	if err := db.Ping(context.Background()); err != nil {
-    applog.Fatal(err, "Failed to connect to database")
-}
+		applog.Fatal(err, "Failed to connect to database")
+	}
 	accounts := storage.NewSocialAccountRepository(db)
 	users := storage.NewUserRepository(db)
 	posts := storage.NewPostRepository(db)
@@ -97,7 +98,11 @@ func main() {
 	zlog.Info().Msg("Outbox dispatcher started")
 
 	// Router Setup
-	router := api.NewRouter(twitterConnector, accounts, posts, cfg.EncryptionKey, signupService, loginService, jwtService)
+	//
+	// To add a new OAuth platform, append its connector to this slice.
+	// No other file outside internal/connectors/<platform>/ needs to change.
+	oauthConnectors := []connectors.OAuthConnector{twitterConnector}
+	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, signupService, loginService, jwtService)
 
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)
@@ -113,3 +118,4 @@ func main() {
 		applog.Fatal(err, "Server crashed")
 	}
 }
+

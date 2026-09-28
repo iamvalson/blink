@@ -3,13 +3,13 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors"
-	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/middleware"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/rs/zerolog/log"
@@ -18,12 +18,16 @@ import (
 
 const oauthTransactionLifetime = 10 * time.Minute
 
+// AuthHandler handles the browser-redirect OAuth flow for any platform that
+// implements connectors.OAuthConnector. It has no dependency on concrete
+// platform packages — adding a new platform only requires registering its
+// connector in the router.
 type AuthHandler struct {
-	twitterConnector *twitter.Connector
-	accounts         *storage.SocialAccountRepository
-	encryptionKey    string
-	transactions     map[string]oauthTransaction
-	transactionsMu   sync.Mutex
+	connector      connectors.OAuthConnector
+	accounts       *storage.SocialAccountRepository
+	encryptionKey  string
+	transactions   map[string]oauthTransaction
+	transactionsMu sync.Mutex
 }
 
 type oauthTransaction struct {
@@ -31,51 +35,41 @@ type oauthTransaction struct {
 	expiresAt time.Time
 }
 
-func NewAuthHandler(tc *twitter.Connector, accounts *storage.SocialAccountRepository, encryptionKey string) *AuthHandler {
+// NewAuthHandler creates a handler for a single OAuth platform.
+func NewAuthHandler(connector connectors.OAuthConnector, accounts *storage.SocialAccountRepository, encryptionKey string) *AuthHandler {
 	return &AuthHandler{
-		twitterConnector: tc,
-		accounts:         accounts,
-		encryptionKey:    encryptionKey,
-		transactions:     make(map[string]oauthTransaction),
+		connector:     connector,
+		accounts:      accounts,
+		encryptionKey: encryptionKey,
+		transactions:  make(map[string]oauthTransaction),
 	}
 }
 
-// TwitterAuth redirects user to Twitter OAuth
-func (h *AuthHandler) TwitterAuth(w http.ResponseWriter, r *http.Request) {
-	// Generate random state for CSRF protection
+// OAuthStart redirects the user to the platform's authorization page.
+func (h *AuthHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 	state, err := generateRandomState()
 	if err != nil {
-		log.Error().
-			Err(err).
-			Msg("Failed to generate OAuth state")
-
+		log.Error().Err(err).Msg("Failed to generate OAuth state")
 		http.Error(w, "Unable to start authentication", http.StatusInternalServerError)
 		return
 	}
 
-	// Generate PKCE verifier
 	verifier := oauth2.GenerateVerifier()
 	now := time.Now()
 
 	h.transactionsMu.Lock()
-
-	// Remove expired transactions
-	for storedState, transaction := range h.transactions {
-		if now.After(transaction.expiresAt) {
+	for storedState, tx := range h.transactions {
+		if now.After(tx.expiresAt) {
 			delete(h.transactions, storedState)
 		}
 	}
-
 	h.transactions[state] = oauthTransaction{
 		verifier:  verifier,
 		expiresAt: now.Add(oauthTransactionLifetime),
 	}
-
 	h.transactionsMu.Unlock()
 
 	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
-
-	// Store state in session/cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "oauth_state",
 		Value:    state,
@@ -86,15 +80,17 @@ func (h *AuthHandler) TwitterAuth(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(oauthTransactionLifetime.Seconds()),
 	})
 
-	// Redirect to Twitter
-	authURL := twitter.GetAuthURL(h.twitterConnector.GetOAuthConfig(), state, verifier)
+	authURL := h.connector.AuthCodeURL(state, verifier)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// TwitterCallback handles OAuth callback
-func (h *AuthHandler) TwitterCallback(w http.ResponseWriter, r *http.Request) {
-	// Always remove temporary OAuth cookies after the callback finishes,
-	// whether it succeeds or fails.
+// TwitterAuth is an alias for OAuthStart for backward compatibility.
+func (h *AuthHandler) TwitterAuth(w http.ResponseWriter, r *http.Request) {
+	h.OAuthStart(w, r)
+}
+
+// OAuthCallback handles the OAuth callback for any platform.
+func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	defer clearOAuthCookies(w, r)
 
 	userID, ok := middleware.UserIDFromContext(r.Context())
@@ -103,166 +99,111 @@ func (h *AuthHandler) TwitterCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Twitter sends this when the user rejects authorization.
+	platform := h.connector.PlatformID()
+
 	if errorCode := r.URL.Query().Get("error"); errorCode != "" {
 		log.Info().
 			Str("oauth_error", errorCode).
 			Str("user_id", userID).
-			Msg("Twitter authorization was denied")
-
-		http.Error(w, "Twitter authorization was denied", http.StatusBadRequest)
+			Str("platform", platform).
+			Msg("OAuth authorization was denied")
+		http.Error(w, fmt.Sprintf("%s authorization was denied", platform), http.StatusBadRequest)
 		return
 	}
 
-	// Get authorization code.
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(
-			w,
-			"Missing authorization code",
-			http.StatusBadRequest,
-		)
+		http.Error(w, "Missing authorization code", http.StatusBadRequest)
 		return
 	}
 
-	// Get OAuth state.
 	state := r.URL.Query().Get("state")
 	if state == "" {
-		http.Error(
-			w,
-			"Missing OAuth state",
-			http.StatusBadRequest,
-		)
+		http.Error(w, "Missing OAuth state", http.StatusBadRequest)
 		return
 	}
 
-	// Validate the callback state against the browser cookie.
 	stateCookie, err := r.Cookie("oauth_state")
 	if err != nil {
-		http.Error(
-			w,
-			"Missing OAuth state cookie",
-			http.StatusBadRequest,
-		)
+		http.Error(w, "Missing OAuth state cookie", http.StatusBadRequest)
 		return
 	}
 
-	// Constant-time comparison is preferable for security-sensitive
-	// values such as OAuth state.
 	if !secureCompare(stateCookie.Value, state) {
-		http.Error(
-			w,
-			"Invalid OAuth state",
-			http.StatusBadRequest,
-		)
+		http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
 		return
 	}
 
-	// Look up and consume the server-side transaction.
 	transaction, ok := h.consumeTransaction(state)
 	if !ok {
-		http.Error(
-			w,
-			"Invalid or expired OAuth state",
-			http.StatusBadRequest,
-		)
+		http.Error(w, "Invalid or expired OAuth state", http.StatusBadRequest)
 		return
 	}
 
-	// Exchange code for token
-	authResult, err := h.twitterConnector.Authenticate(r.Context(), connectors.AuthParams{
+	authResult, err := h.connector.Authenticate(r.Context(), connectors.AuthParams{
 		Code:         code,
 		CodeVerifier: transaction.verifier,
 	})
 	if err != nil {
-		log.Error().Err(err).Str("user_id", userID).
-			Msg("Twitter authentication failed")
-
+		log.Error().Err(err).Str("user_id", userID).Str("platform", platform).
+			Msg("OAuth authentication failed")
 		http.Error(w, "Authentication failed", http.StatusInternalServerError)
 		return
 	}
 
-	log.Info().Str("user_id", userID).Str("platform_user_id", authResult.PlatformUserID).Msg("Twitter auth successful")
+	log.Info().
+		Str("user_id", userID).
+		Str("platform", platform).
+		Str("platform_user_id", authResult.PlatformUserID).
+		Msg("OAuth authentication successful")
 
-	// Encrypt access token before storing
 	encryptedAccessToken, err := auth.EncryptToken(authResult.AccessToken, h.encryptionKey)
 	if err != nil {
-		log.Error().
-			Err(err).
-			Str("user_id", userID).
-			Msg("Failed to encrypt Twitter access token")
-
-		http.Error(
-			w,
-			"Failed to secure access token",
-			http.StatusInternalServerError,
-		)
+		log.Error().Err(err).Str("user_id", userID).Str("platform", platform).
+			Msg("Failed to encrypt access token")
+		http.Error(w, "Failed to secure access token", http.StatusInternalServerError)
 		return
 	}
 
 	// Refresh tokens may not always be returned.
-	//
-	// Keep the value empty when Twitter does not provide one.
-	// The repository should preserve the existing refresh token
-	// during an upsert in that case.
+	// Keep empty when the platform does not provide one so the repository
+	// preserves the existing refresh token during an upsert.
 	encryptedRefreshToken := ""
 	if authResult.RefreshToken != "" {
 		encryptedRefreshToken, err = auth.EncryptToken(authResult.RefreshToken, h.encryptionKey)
 		if err != nil {
-			log.Error().
-				Err(err).
-				Str("user_id", userID).
-				Msg("Failed to encrypt Twitter refresh token")
-
-			http.Error(
-				w,
-				"Failed to secure refresh token",
-				http.StatusInternalServerError,
-			)
+			log.Error().Err(err).Str("user_id", userID).Str("platform", platform).
+				Msg("Failed to encrypt refresh token")
+			http.Error(w, "Failed to secure refresh token", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// Make sure account storage is available.
 	if h.accounts == nil {
-		log.Error().
-			Str("user_id", userID).
-			Msg("Social account repository is unavailable")
-
-		http.Error(
-			w,
-			"Account storage is unavailable",
-			http.StatusInternalServerError,
-		)
+		log.Error().Str("user_id", userID).Msg("Social account repository is unavailable")
+		http.Error(w, "Account storage is unavailable", http.StatusInternalServerError)
 		return
 	}
 
-	// Save or update the connected Twitter account.
-	if err := h.accounts.Upsert(r.Context(), userID, "twitter", authResult.PlatformUserID, encryptedAccessToken, encryptedRefreshToken, authResult.Expiry); err != nil {
-		log.Error().
-			Err(err).
-			Str("user_id", userID).
-			Msg("Failed to save Twitter account")
-
-		http.Error(
-			w,
-			"Failed to save Twitter account",
-			http.StatusInternalServerError,
-		)
+	if err := h.accounts.Upsert(r.Context(), userID, platform, authResult.PlatformUserID, encryptedAccessToken, encryptedRefreshToken, authResult.Expiry); err != nil {
+		log.Error().Err(err).Str("user_id", userID).Str("platform", platform).
+			Msg("Failed to save social account")
+		http.Error(w, fmt.Sprintf("Failed to save %s account", platform), http.StatusInternalServerError)
 		return
 	}
 
-	http.Redirect(w, r, "/dashboard?twitter=connected", http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/dashboard?%s=connected", platform), http.StatusSeeOther)
 }
 
-// clearOAuthCookie removes the temporary OAuth state cookie.
+// TwitterCallback is an alias for OAuthCallback for backward compatibility.
+func (h *AuthHandler) TwitterCallback(w http.ResponseWriter, r *http.Request) {
+	h.OAuthCallback(w, r)
+}
+
+// clearOAuthCookies removes the temporary OAuth state cookies.
 func clearOAuthCookies(w http.ResponseWriter, r *http.Request) {
 	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
-
-	for _, name := range []string{
-		"oauth_state",
-		"oauth_verifier",
-	} {
+	for _, name := range []string{"oauth_state", "oauth_verifier"} {
 		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Value:    "",
@@ -275,34 +216,24 @@ func clearOAuthCookies(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// consumeTransaction retrieves and removes an OAuth transaction.
-//
-// Transactions are single-use. Once consumed, the same OAuth state
-// cannot be used again.
-func (h *AuthHandler) consumeTransaction(
-	state string,
-) (oauthTransaction, bool) {
+// consumeTransaction retrieves and removes an OAuth transaction (single-use).
+func (h *AuthHandler) consumeTransaction(state string) (oauthTransaction, bool) {
 	h.transactionsMu.Lock()
 	defer h.transactionsMu.Unlock()
 
-	transaction, exists := h.transactions[state]
-
+	tx, exists := h.transactions[state]
 	if !exists {
 		return oauthTransaction{}, false
 	}
-
-	// Always delete the transaction after retrieval.
 	delete(h.transactions, state)
 
-	// Reject expired transactions.
-	if time.Now().After(transaction.expiresAt) {
+	if time.Now().After(tx.expiresAt) {
 		return oauthTransaction{}, false
 	}
-
-	return transaction, true
+	return tx, true
 }
 
-// generateRandomState generates a cryptographically secure OAuth state.
+// generateRandomState generates a cryptographically secure OAuth state token.
 func generateRandomState() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -316,12 +247,10 @@ func secureCompare(a, b string) bool {
 	if len(a) != len(b) {
 		return false
 	}
-
 	var result byte
-
 	for i := 0; i < len(a); i++ {
 		result |= a[i] ^ b[i]
 	}
-
 	return result == 0
 }
+

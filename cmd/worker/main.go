@@ -91,8 +91,10 @@ func main() {
 		twitterConnector = twitter.New(twitterCfg)
 	}
 
+	// To add a new publish platform, add it to this map.
+	// No other file outside internal/connectors/<platform>/ needs to change.
 	platformConnectors := map[string]connectors.PlatformConnector{
-		"twitter": twitterConnector,
+		connectors.PlatformTwitter: twitterConnector,
 	}
 
 	// Create worker server
