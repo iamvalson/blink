@@ -11,6 +11,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
+	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
 	applog "github.com/iamvalson/blink/internal/log"
 	"github.com/iamvalson/blink/internal/storage"
@@ -91,10 +92,18 @@ func main() {
 		twitterConnector = twitter.New(twitterCfg)
 	}
 
+	youtubeCfg := youtube.YouTubeConfig{
+		ClientID:    os.Getenv("YOUTUBE_CLIENT_ID"),
+		ClientSecret: os.Getenv("YOUTUBE_CLIENT_SECRET"),
+		CallbackURL: os.Getenv("YOUTUBE_CALLBACK_URL"),
+	}
+	youtubeConnector := youtube.New(youtubeCfg)
+
 	// To add a new publish platform, add it to this map.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	platformConnectors := map[string]connectors.PlatformConnector{
 		connectors.PlatformTwitter: twitterConnector,
+		connectors.PlatformYoutube: youtubeConnector,
 	}
 
 	// Create worker server

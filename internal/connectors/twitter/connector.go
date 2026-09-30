@@ -67,7 +67,7 @@ func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthPara
 }
 
 // UploadMedia uploads media to Twitter and returns media ID
-func (c *Connector) UploadMedia(ctx context.Context, media io.Reader, mediaType string) (mediaID string, err error) {
+func (c *Connector) UploadMedia(ctx context.Context, token string, media io.Reader, mediaType string) (mediaID string, err error) {
 	return "media_placeholder", nil
 }
 

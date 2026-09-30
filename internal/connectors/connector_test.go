@@ -44,7 +44,7 @@ func TestMockConnectorUploadMedia(t *testing.T) {
 
 	media := bytes.NewReader([]byte("fake image data"))
 
-	mediaID, err := mock.UploadMedia(context.Background(), media, "image/png")
+	mediaID, err := mock.UploadMedia(context.Background(), "mock-token", media, "image/png")
 
 	if err != nil {
 		t.Fatalf("UploadMedia failed: %v", err)

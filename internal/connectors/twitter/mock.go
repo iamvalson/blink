@@ -33,7 +33,7 @@ func (m *MockConnector) Authenticate(ctx context.Context, params connectors.Auth
 }
 
 // UploadMedia simulates media upload to Twitter/X and returns a fake media ID.
-func (m *MockConnector) UploadMedia(ctx context.Context, media io.Reader, mediaType string) (string, error) {
+func (m *MockConnector) UploadMedia(ctx context.Context, token string, media io.Reader, mediaType string) (string, error) {
 	return fmt.Sprintf("mock_media_%s", uuid.New().String()[:8]), nil
 }
 

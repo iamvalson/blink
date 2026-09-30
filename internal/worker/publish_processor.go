@@ -3,6 +3,9 @@ package worker
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -153,13 +156,62 @@ func (p *PublishProcessor) publishToTarget(
     }
 
     // Publish
+    caption := ""
+    if post.Caption != nil {
+        caption = *post.Caption
+    }
     input := model.PublishInput{
-        Caption:   *post.Caption,
+        Caption:   caption,
         MediaURL:  post.MediaURL,
         MediaType: post.MediaType,
     }
 
-    publicURL, platformPostID, err := connector.Publish(ctx, accessToken, input.Caption)
+    var mediaIDs []string
+    if input.MediaURL != nil && *input.MediaURL != "" {
+        req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, *input.MediaURL, nil)
+        if reqErr != nil {
+            return fmt.Errorf("create download request: %w", reqErr)
+        }
+        req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+
+        resp, respErr := http.DefaultClient.Do(req)
+        if respErr != nil {
+            return fmt.Errorf("download media: %w", respErr)
+        }
+        defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK {
+            return fmt.Errorf("download media failed: %d", resp.StatusCode)
+        }
+
+        mediaType := "application/octet-stream"
+        if input.MediaType != nil {
+            mediaType = *input.MediaType
+        }
+
+        tempFile, err := os.CreateTemp("", "upload-*.tmp")
+        if err != nil {
+            return fmt.Errorf("create temp file: %w", err)
+        }
+        defer os.Remove(tempFile.Name())
+        defer tempFile.Close()
+
+        if _, err := io.Copy(tempFile, resp.Body); err != nil {
+            return fmt.Errorf("copy to temp file: %w", err)
+        }
+        
+        if _, err := tempFile.Seek(0, 0); err != nil {
+            return fmt.Errorf("seek temp file: %w", err)
+        }
+
+        mediaID, uploadErr := connector.UploadMedia(ctx, accessToken, tempFile, mediaType)
+        if uploadErr != nil {
+            return fmt.Errorf("upload media to platform: %w", uploadErr)
+        }
+        mediaIDs = append(mediaIDs, mediaID)
+    }
+
+    publicURL, platformPostID, err := connector.Publish(ctx, accessToken, input.Caption, mediaIDs...)
     if err != nil {
         errMsg := err.Error()
         if err := p.publications.MarkAttemptFailed(ctx, attempt.ID, "PUBLISH_FAILED", errMsg); err != nil {

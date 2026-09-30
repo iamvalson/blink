@@ -8,7 +8,7 @@ import (
 // MockConnector is a test double for PlatformConnector
 type MockConnector struct {
 	AuthenticateFn func(ctx context.Context, params AuthParams) (AuthResult, error)
-	UploadMediaFn  func(ctx context.Context, media io.Reader, mediaType string) (string, error)
+	UploadMediaFn  func(ctx context.Context, token string, media io.Reader, mediaType string) (string, error)
 	PublishFn      func(ctx context.Context, token string, caption string, mediaIDs ...string) (string, string, error)
 	GetStatusFn    func(ctx context.Context, platformPostID string) (string, string, error)
 }
@@ -17,8 +17,8 @@ func (m *MockConnector) Authenticate(ctx context.Context, params AuthParams) (Au
 	return m.AuthenticateFn(ctx, params)
 }
 
-func (m *MockConnector) UploadMedia(ctx context.Context, media io.Reader, mediaType string) (string, error) {
-	return m.UploadMediaFn(ctx, media, mediaType)
+func (m *MockConnector) UploadMedia(ctx context.Context, token string, media io.Reader, mediaType string) (string, error) {
+	return m.UploadMediaFn(ctx, token, media, mediaType)
 }
 
 func (m *MockConnector) Publish(ctx context.Context, token string, caption string, mediaIDs ...string) (string, string, error) {
@@ -35,7 +35,7 @@ func NewMockConnector() *MockConnector {
 		AuthenticateFn: func(ctx context.Context, params AuthParams) (AuthResult, error) {
 			return AuthResult{PlatformUserID: "mock_user_123"}, nil
 		},
-		UploadMediaFn: func(ctx context.Context, media io.Reader, mediaType string) (string, error) {
+		UploadMediaFn: func(ctx context.Context, token string, media io.Reader, mediaType string) (string, error) {
 			return "mock_media_123", nil
 		},
 		PublishFn: func(ctx context.Context, token string, caption string, mediaIDs ...string) (string, string, error) {

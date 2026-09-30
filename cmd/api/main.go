@@ -15,6 +15,7 @@ import (
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
+	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
 	applog "github.com/iamvalson/blink/internal/log"
 	"github.com/iamvalson/blink/internal/outbox"
@@ -44,6 +45,14 @@ func main() {
 		CallbackURL:  os.Getenv("TWITTER_CALLBACK_URL"),
 	}
 	twitterConnector := twitter.New(twitterCfg)
+
+	// Initialize YouTube connector
+	youtubeCfg := youtube.YouTubeConfig{
+		ClientID:    os.Getenv("YOUTUBE_CLIENT_ID"),
+		ClientSecret: os.Getenv("YOUTUBE_CLIENT_SECRET"),
+		CallbackURL: os.Getenv("YOUTUBE_CALLBACK_URL"),
+	}
+	youtubeConnector := youtube.New(youtubeCfg)
 
 	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
@@ -101,7 +110,7 @@ func main() {
 	//
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
-	oauthConnectors := []connectors.OAuthConnector{twitterConnector}
+	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector}
 	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, signupService, loginService, jwtService)
 
 	// HTTP Server

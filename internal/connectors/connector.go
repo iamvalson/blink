@@ -16,7 +16,7 @@ type PlatformConnector interface {
 
 	// UploadMedia uploads media to the platform and returns a URL/ID.
 	// For Twitter (X) it uploads via v2 API; for YouTube it queues a video upload.
-	UploadMedia(ctx context.Context, media io.Reader, mediaType string) (mediaId string, err error)
+	UploadMedia(ctx context.Context, token string, media io.Reader, mediaType string) (mediaId string, err error)
 
 	// Publish posts content to the platform.
 	// Returns the public URL and platform-specific post ID.
