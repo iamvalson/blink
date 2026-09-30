@@ -63,7 +63,7 @@ func TestConnector_Authenticate(t *testing.T) {
 			calledToken = true
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"access_token": "mock-access-token",
 				"refresh_token": "mock-refresh-token",
 				"expires_in": 3600,
@@ -76,7 +76,7 @@ func TestConnector_Authenticate(t *testing.T) {
 			calledChannel = true
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"items": [
 					{
 						"id": "channel-123",
@@ -145,7 +145,7 @@ func TestConnector_UploadMedia(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"id": "test-video-123"}`))
+			_, _ = w.Write([]byte(`{"id": "test-video-123"}`))
 			return
 		}
 
@@ -208,7 +208,7 @@ func TestConnector_Publish(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"id": "vid-123"}`))
+			_, _ = w.Write([]byte(`{"id": "vid-123"}`))
 			return
 		}
 
@@ -249,7 +249,7 @@ func TestConnector_GetStatus(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"items": [
 					{
 						"id": "vid-123",
