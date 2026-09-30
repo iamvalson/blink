@@ -1,8 +1,13 @@
 const backendUrl = process.env.BACKEND_API_URL ?? "http://localhost:8080";
 
 export function backendRequest(path: string, init: RequestInit = {}) {
+  const initHeaders = new Headers(init.headers);
+  // Bypass the ngrok browser interstitial page on server-to-server requests.
+  initHeaders.set("ngrok-skip-browser-warning", "true");
+
   return fetch(`${backendUrl}${path.startsWith("/") ? path : `/${path}`}`, {
     ...init,
+    headers: initHeaders,
     cache: "no-store",
     redirect: "manual",
   });
