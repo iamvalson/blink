@@ -29,12 +29,30 @@ function DashboardContent() {
         {params.get("twitter") === "connected" && (
           <p>Twitter connected successfully.</p>
         )}
+        {params.get("youtube") === "connected" && (
+          <p>YouTube connected successfully.</p>
+        )}
 
-        <a className="button" href="/api/auth/twitter">
-          Connect Twitter
-        </a>
+        <div className="flex gap-4">
+          <a className="button" href="/api/auth/twitter">
+            Connect Twitter
+          </a>
 
-        <button className="button" onClick={logout} type="button">
+          <a
+            className="button"
+            href="/api/auth/youtube"
+            style={{ backgroundColor: "#ff0000", color: "white" }}
+          >
+            Connect YouTube
+          </a>
+        </div>
+
+        <button
+          className="button"
+          onClick={logout}
+          type="button"
+          style={{ marginTop: "2rem" }}
+        >
           Sign out
         </button>
       </section>
