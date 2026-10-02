@@ -92,6 +92,7 @@ CREATE TABLE publication_attempts (
     CONSTRAINT publication_attempts_status_check CHECK (status IN (
         'PENDING',
         'PROCESSING',
+        'UNKNOWN',
         'SUCCEEDED',
         'FAILED',
         'CANCELLED'

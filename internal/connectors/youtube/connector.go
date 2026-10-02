@@ -7,18 +7,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/iamvalson/blink/internal/connectors"
 	"golang.org/x/oauth2"
 )
 
-
-type Connector struct{
-	oauthConfig	*oauth2.Config
-	accessToken  string
-	baseURL		 string
-	httpClient	 *http.Client
+type Connector struct {
+	oauthConfig *oauth2.Config
+	accessToken string
+	baseURL     string
+	httpClient  *http.Client
 }
 
 var _ connectors.OAuthConnector = (*Connector)(nil)
@@ -27,25 +27,23 @@ var _ connectors.OAuthConnector = (*Connector)(nil)
 func New(cfg YouTubeConfig) *Connector {
 	return &Connector{
 		oauthConfig: NewOAuthConfig(cfg),
-		httpClient: http.DefaultClient,
-		baseURL: "https://www.googleapis.com/youtube/v3",
+		httpClient:  http.DefaultClient,
+		baseURL:     "https://www.googleapis.com/youtube/v3",
 	}
 }
 
-
-//PlatformID returns the stable slug used as route segment and storage key
+// PlatformID returns the stable slug used as route segment and storage key
 func (c *Connector) PlatformID() string {
 	return connectors.PlatformYoutube
 }
 
-
 // AuthCodeURL returns the URL the browser should be  redirected to
-func (c *Connector) AuthCodeURL(state, verifier string) string{
+func (c *Connector) AuthCodeURL(state, verifier string) string {
 	return GetAuthURL(c.oauthConfig, state)
 }
 
 // SetAccessToken sets the user's OAuth token
-func (c *Connector) SetAccessToken(token string){
+func (c *Connector) SetAccessToken(token string) {
 	c.accessToken = token
 }
 
@@ -57,7 +55,7 @@ func (c *Connector) Authenticate(
 	token, err := ExchangeCodeForToken(
 		ctx, c.oauthConfig, params.Code,
 	)
-	if err != nil{
+	if err != nil {
 		return connectors.AuthResult{}, fmt.Errorf(
 			"oauth exchange failed: %w",
 			err,
@@ -76,12 +74,11 @@ func (c *Connector) Authenticate(
 
 	return connectors.AuthResult{
 		PlatformUserID: channel.ID,
-		AccessToken: token.AccessToken,
-		RefreshToken: token.RefreshToken,
-		Expiry: token.Expiry,
+		AccessToken:    token.AccessToken,
+		RefreshToken:   token.RefreshToken,
+		Expiry:         token.Expiry,
 	}, nil
 }
-
 
 // UploadMedia uploads media to the platform and returns a platform-specific
 // media ID. For platforms with asynchronous processing, the returned ID
@@ -89,6 +86,7 @@ func (c *Connector) Authenticate(
 func (c *Connector) UploadMedia(
 	ctx context.Context,
 	token string,
+	attemptID string,
 	media io.Reader,
 	mediaType string,
 ) (string, error) {
@@ -105,14 +103,17 @@ func (c *Connector) UploadMedia(
 
 	baseURL := strings.Replace(c.baseURL, "/youtube/v3", "", 1)
 	initURL := fmt.Sprintf("%s/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", baseURL)
-	
+
+	// Tag the video with the attempt ID for crash reconciliation
+	attemptTag := fmt.Sprintf("blink_attempt_%s", attemptID)
 	dummyMeta := map[string]interface{}{
-		"snippet": map[string]string{
+		"snippet": map[string]interface{}{
 			"title": "Uploading...",
+			"tags":  []string{attemptTag},
 		},
 	}
 	metaBody, _ := json.Marshal(dummyMeta)
-	
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, initURL, bytes.NewReader(metaBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create upload init request: %w", err)
@@ -171,11 +172,11 @@ func (c *Connector) UploadMedia(
 	return result.ID, nil
 }
 
-
 // Publish publishes a YouTube video
 func (c *Connector) Publish(
 	ctx context.Context,
 	token string,
+	attemptID string,
 	caption string,
 	mediaIDs ...string,
 ) (string, string, error) {
@@ -196,11 +197,13 @@ func (c *Connector) Publish(
 	if len(title) > 100 {
 		title = title[:97] + "..."
 	}
-	
+
 	description := ""
 	if len(parts) > 1 {
 		description = strings.TrimSpace(parts[1])
 	}
+
+	attemptTag := fmt.Sprintf("blink_attempt_%s", attemptID)
 
 	payload := map[string]interface{}{
 		"id": videoID,
@@ -208,6 +211,7 @@ func (c *Connector) Publish(
 			"categoryId":  "22", // Default to People & Blogs
 			"title":       title,
 			"description": description,
+			"tags":        []string{attemptTag}, // Maintain the tag
 		},
 		"status": map[string]interface{}{
 			"privacyStatus": "public",
@@ -253,6 +257,14 @@ func (c *Connector) GetStatus(
 	ctx context.Context,
 	platformPostID string,
 ) (string, string, error) {
+	return c.getStatus(ctx, c.accessToken, platformPostID)
+}
+
+func (c *Connector) getStatus(
+	ctx context.Context,
+	token string,
+	platformPostID string,
+) (string, string, error) {
 
 	if platformPostID == "" {
 		return "", "", fmt.Errorf(
@@ -266,8 +278,8 @@ func (c *Connector) GetStatus(
 		return "", "", fmt.Errorf("failed to create status request: %w", err)
 	}
 
-	if c.accessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -281,7 +293,7 @@ func (c *Connector) GetStatus(
 		return "", "", fmt.Errorf("fetch status failed: %d %s", resp.StatusCode, string(body))
 	}
 
-	var result struct {
+	var statusResult struct {
 		Items []struct {
 			Status struct {
 				UploadStatus string `json:"uploadStatus"`
@@ -292,15 +304,15 @@ func (c *Connector) GetStatus(
 		} `json:"items"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&statusResult); err != nil {
 		return "", "", fmt.Errorf("failed to decode status response: %w", err)
 	}
 
-	if len(result.Items) == 0 {
+	if len(statusResult.Items) == 0 {
 		return "", "", fmt.Errorf("video not found")
 	}
 
-	item := result.Items[0]
+	item := statusResult.Items[0]
 	internalStatus := "processing"
 
 	if item.Status.UploadStatus == "processed" && item.ProcessingDetails.ProcessingStatus == "succeeded" {
@@ -320,4 +332,66 @@ func (c *Connector) GetStatus(
 // GetOAuthConfig returns the OAuth config.
 func (c *Connector) GetOAuthConfig() *oauth2.Config {
 	return c.oauthConfig
+}
+
+// ReconcilePublish attempts to locate a previously published or uploaded video for an ambiguous attempt.
+// For YouTube, it searches the user's channel for the specific attempt ID tag.
+func (c *Connector) ReconcilePublish(
+	ctx context.Context,
+	token string,
+	platformUserID string,
+	attemptID string,
+	caption string,
+) (result connectors.ReconciliationResult, err error) {
+	if token == "" {
+		return connectors.ReconciliationResult{}, fmt.Errorf("no access token set")
+	}
+
+	attemptTag := fmt.Sprintf("blink_attempt_%s", attemptID)
+
+	// Query the YouTube search API for the tag among the user's own videos
+	searchURL := fmt.Sprintf("%s/search?part=snippet&forMine=true&q=%s&type=video&maxResults=5", c.baseURL, url.QueryEscape(attemptTag))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return connectors.ReconciliationResult{}, fmt.Errorf("failed to create search request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return connectors.ReconciliationResult{}, fmt.Errorf("failed to execute search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return connectors.ReconciliationResult{}, fmt.Errorf("search failed: %d %s", resp.StatusCode, string(body))
+	}
+
+	var searchResult struct {
+		Items []struct {
+			Id struct {
+				VideoId string `json:"videoId"`
+			} `json:"id"`
+		} `json:"items"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
+		return connectors.ReconciliationResult{}, fmt.Errorf("failed to decode search response: %w", err)
+	}
+
+	if len(searchResult.Items) > 0 {
+		videoID := searchResult.Items[0].Id.VideoId
+		status, publicURL, statusErr := c.getStatus(ctx, token, videoID)
+		if statusErr != nil {
+			return connectors.ReconciliationResult{Outcome: connectors.ReconciliationUnknown}, nil
+		}
+		if status != "published" {
+			return connectors.ReconciliationResult{Outcome: connectors.ReconciliationUnknown, PlatformPostID: videoID, PublicURL: publicURL}, nil
+		}
+		return connectors.ReconciliationResult{Outcome: connectors.ReconciliationFound, PublicURL: publicURL, PlatformPostID: videoID}, nil
+	}
+
+	return connectors.ReconciliationResult{Outcome: connectors.ReconciliationUnknown}, nil
 }

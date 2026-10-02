@@ -5,6 +5,20 @@ import (
 	"io"
 )
 
+type ReconciliationOutcome string
+
+const (
+	ReconciliationFound             ReconciliationOutcome = "FOUND"
+	ReconciliationNotFoundConfirmed ReconciliationOutcome = "NOT_FOUND_CONFIRMED"
+	ReconciliationUnknown           ReconciliationOutcome = "UNKNOWN"
+)
+
+type ReconciliationResult struct {
+	Outcome        ReconciliationOutcome `json:"outcome"`
+	PlatformPostID string                `json:"platform_post_id"`
+	PublicURL      string                `json:"public_url"`
+}
+
 // PlatformConnector defines the interface for publishing to a platform.
 // Each platform (e.g. X, YouTube) implements its own package-level connector
 // that satisfies this interface. The publish worker dispatches through this
@@ -16,15 +30,18 @@ type PlatformConnector interface {
 
 	// UploadMedia uploads media to the platform and returns a URL/ID.
 	// For Twitter (X) it uploads via v2 API; for YouTube it queues a video upload.
-	UploadMedia(ctx context.Context, token string, media io.Reader, mediaType string) (mediaId string, err error)
+	UploadMedia(ctx context.Context, token string, attemptID string, media io.Reader, mediaType string) (mediaId string, err error)
 
 	// Publish posts content to the platform.
 	// Returns the public URL and platform-specific post ID.
-	Publish(ctx context.Context, token string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error)
+	Publish(ctx context.Context, token string, attemptID string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error)
 
 	// GetStatus polls the platform for post status.
 	// Used for async publishing (e.g. YouTube video processing).
 	GetStatus(ctx context.Context, platformPostID string) (status string, publicURL string, err error)
+
+	// ReconcilePublish resolves an ambiguous publication without creating another post.
+	ReconcilePublish(ctx context.Context, token string, platformUserID string, attemptID string, caption string) (ReconciliationResult, error)
 }
 
 // OAuthConnector is implemented by any platform that supports the

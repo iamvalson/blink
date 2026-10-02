@@ -10,12 +10,11 @@ import (
 	"github.com/iamvalson/blink/internal/connectors"
 )
 
-
 func TestNew(t *testing.T) {
 	cfg := TwitterConfig{
-		ClientID: "test_id",
+		ClientID:     "test_id",
 		ClientSecret: "test_secret",
-		CallbackURL: "http://localhost:8080/auth/twitter/callback",
+		CallbackURL:  "http://localhost:8080/auth/twitter/callback",
 	}
 
 	conn := New(cfg)
@@ -24,12 +23,11 @@ func TestNew(t *testing.T) {
 	}
 }
 
-
 func TestSetAccessToken(t *testing.T) {
 	cfg := TwitterConfig{
-		ClientID: "test_id",
+		ClientID:     "test_id",
 		ClientSecret: "test_secret",
-		CallbackURL: "http://localhost:8080/auth/twitter/callback",
+		CallbackURL:  "http://localhost:8080/auth/twitter/callback",
 	}
 
 	conn := New(cfg)
@@ -41,28 +39,26 @@ func TestSetAccessToken(t *testing.T) {
 	}
 }
 
-
 func TestPublishWithoutToken(t *testing.T) {
 	cfg := TwitterConfig{
-		ClientID: "test_id",
+		ClientID:     "test_id",
 		ClientSecret: "test_secret",
-		CallbackURL: "http://localhost:8080/auth/twitter/callback",
+		CallbackURL:  "http://localhost:8080/auth/twitter/callback",
 	}
 
 	conn := New(cfg)
 
-	_, _, err := conn.Publish(context.Background(), "", "test tweet")
+	_, _, err := conn.Publish(context.Background(), "", "attempt-123", "test tweet")
 	if err == nil {
 		t.Fatal("Publish should fail without access token")
 	}
 }
 
-
 func TestGetStatus(t *testing.T) {
 	cfg := TwitterConfig{
-		ClientID: "test_id",
+		ClientID:     "test_id",
 		ClientSecret: "test_secret",
-		CallbackURL: "http://localhost:8080/auth/twitter/callback",
+		CallbackURL:  "http://localhost:8080/auth/twitter/callback",
 	}
 
 	conn := New(cfg)
@@ -78,6 +74,18 @@ func TestGetStatus(t *testing.T) {
 
 	if url != "https://x.com/i/web/status/12345" {
 		t.Fatalf("Expected a valid URL, got %s", url)
+	}
+}
+
+func TestReconcilePublishReturnsUnknown(t *testing.T) {
+	conn := New(TwitterConfig{})
+
+	result, err := conn.ReconcilePublish(context.Background(), "token", "user", "attempt-123", "tweet")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Outcome != connectors.ReconciliationUnknown {
+		t.Fatalf("expected UNKNOWN reconciliation outcome, got %q", result.Outcome)
 	}
 }
 
@@ -98,7 +106,7 @@ func TestPublishSuccessWithMockServer(t *testing.T) {
 		httpClient: server.Client(),
 	}
 
-	url, postID, err := conn.Publish(context.Background(), "test_valid_token", "Hello World")
+	url, postID, err := conn.Publish(context.Background(), "test_valid_token", "attempt-123", "Hello World")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,7 +132,7 @@ func TestPublishRateLimitedWithMockServer(t *testing.T) {
 		httpClient: server.Client(),
 	}
 
-	_, _, err := conn.Publish(context.Background(), "test_valid_token", "Hello World")
+	_, _, err := conn.Publish(context.Background(), "test_valid_token", "attempt-123", "Hello World")
 	if err != connectors.ErrRateLimited {
 		t.Fatalf("expected ErrRateLimited, got %v", err)
 	}
@@ -142,7 +150,7 @@ func TestPublishAPIErrorWithMockServer(t *testing.T) {
 		httpClient: server.Client(),
 	}
 
-	_, _, err := conn.Publish(context.Background(), "test_valid_token", "Hello World")
+	_, _, err := conn.Publish(context.Background(), "test_valid_token", "attempt-123", "Hello World")
 	if err == nil || !strings.Contains(err.Error(), "x api error: 402") {
 		t.Fatalf("expected 402 error, got %v", err)
 	}

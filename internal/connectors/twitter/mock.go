@@ -33,13 +33,13 @@ func (m *MockConnector) Authenticate(ctx context.Context, params connectors.Auth
 }
 
 // UploadMedia simulates media upload to Twitter/X and returns a fake media ID.
-func (m *MockConnector) UploadMedia(ctx context.Context, token string, media io.Reader, mediaType string) (string, error) {
+func (m *MockConnector) UploadMedia(ctx context.Context, token string, attemptID string, media io.Reader, mediaType string) (string, error) {
 	return fmt.Sprintf("mock_media_%s", uuid.New().String()[:8]), nil
 }
 
 // Publish simulates posting a tweet on X without making network requests.
 // It returns a mock platform post ID and URL.
-func (m *MockConnector) Publish(ctx context.Context, token string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error) {
+func (m *MockConnector) Publish(ctx context.Context, token string, attemptID string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error) {
 	if token == "" {
 		return "", "", fmt.Errorf("no access token set")
 	}
@@ -56,3 +56,7 @@ func (m *MockConnector) GetStatus(ctx context.Context, platformPostID string) (s
 	return "published", publicURL, nil
 }
 
+// ReconcilePublish simulates reconciling a post.
+func (m *MockConnector) ReconcilePublish(ctx context.Context, token string, platformUserID string, attemptID string, caption string) (connectors.ReconciliationResult, error) {
+	return connectors.ReconciliationResult{Outcome: connectors.ReconciliationNotFoundConfirmed}, nil
+}

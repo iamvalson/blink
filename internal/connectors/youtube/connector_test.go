@@ -22,9 +22,9 @@ func setupTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 // setupTestConnector configures a Connector to hit the provided test server URL
 func setupTestConnector(t *testing.T, serverURL string) *Connector {
 	cfg := YouTubeConfig{
-		ClientID:    "test-client-id",
+		ClientID:     "test-client-id",
 		ClientSecret: "test-client-secret",
-		CallbackURL: "http://localhost/callback",
+		CallbackURL:  "http://localhost/callback",
 	}
 
 	conn := New(cfg)
@@ -158,7 +158,7 @@ func TestConnector_UploadMedia(t *testing.T) {
 	videoData := strings.NewReader("dummy video content")
 	ctx := context.Background()
 
-	mediaID, err := conn.UploadMedia(ctx, "mock-access-token", videoData, "video/mp4")
+	mediaID, err := conn.UploadMedia(ctx, "mock-access-token", "test.mp4", videoData, "video/mp4")
 
 	if err != nil && strings.Contains(err.Error(), "not implemented") {
 		// Expecting failure due to missing implementation in TDD
@@ -219,7 +219,7 @@ func TestConnector_Publish(t *testing.T) {
 	ctx := context.Background()
 
 	caption := "My Video Title\nHere is a detailed description of the video."
-	publicURL, postID, err := conn.Publish(ctx, "mock-token", caption, "vid-123")
+	publicURL, postID, err := conn.Publish(ctx, "mock-token", "attempt-123", caption, "vid-123")
 
 	if err != nil {
 		t.Fatalf("Publish failed: %v", err)
@@ -235,6 +235,34 @@ func TestConnector_Publish(t *testing.T) {
 	}
 	if postID != "vid-123" {
 		t.Errorf("expected postID vid-123, got %s", postID)
+	}
+}
+
+func TestConnector_ReconcilePublishReturnsUnknownWhileProcessing(t *testing.T) {
+	ts := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/youtube/v3/search" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"items":[{"id":{"videoId":"vid-123"}}]}`))
+			return
+		}
+		if r.URL.Path == "/youtube/v3/videos" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"items":[{"status":{"uploadStatus":"uploaded"},"processingDetails":{"processingStatus":"processing"}}]}`))
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+	})
+
+	conn := setupTestConnector(t, ts.URL)
+	result, err := conn.ReconcilePublish(context.Background(), "token", "channel-123", "attempt-123", "caption")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Outcome != connectors.ReconciliationUnknown {
+		t.Fatalf("expected UNKNOWN reconciliation outcome, got %q", result.Outcome)
+	}
+	if result.PlatformPostID != "vid-123" {
+		t.Fatalf("expected video ID to be retained, got %q", result.PlatformPostID)
 	}
 }
 
