@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -45,6 +47,7 @@ type publicationStore interface {
 	MarkAttemptRetrying(context.Context, uuid.UUID, string, string, string, time.Time) error
 	MarkPostTargetPublished(context.Context, uuid.UUID) error
 	UpdatePostStatus(context.Context, uuid.UUID, string) error
+	RecordPermanentFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *string, string, string, int, string, string, string, string, []byte) error
 }
 
 func NewPublishProcessor(
@@ -120,7 +123,7 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 				firstErr = err
 			}
 			if publishClassification(err) == connectors.ErrorRetryable {
-				if scheduleErr := p.scheduleRetry(ctx, job.PostID, target.ID, err); scheduleErr != nil && firstErr == err {
+				if scheduleErr := p.scheduleRetry(ctx, job.PostID, target.ID, task, err); scheduleErr != nil && firstErr == err {
 					firstErr = scheduleErr
 				}
 			} else if publishClassification(err) == connectors.ErrorAmbiguous {
@@ -335,16 +338,13 @@ func (p *PublishProcessor) publishToTarget(
 	return nil
 }
 
-func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID uuid.UUID, cause error) error {
+func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, cause error) error {
 	attempt, err := p.publications.GetPublicationAttempt(ctx, targetID)
 	if err != nil {
 		return err
 	}
 	if !retryPolicy.ShouldRetry(cause, attempt.AttemptCount) {
-		if attempt.AttemptCount >= MaxAttempts {
-			return p.publications.MarkAttemptFailed(ctx, attempt.ID, "MAX_ATTEMPTS_EXCEEDED", cause.Error())
-		}
-		return nil
+		return p.recordPermanentFailure(ctx, postID, targetID, task, attempt, cause)
 	}
 	if p.scheduler == nil {
 		return fmt.Errorf("retry scheduler is not configured")
@@ -354,11 +354,11 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 	if err := p.publications.MarkAttemptRetrying(ctx, attempt.ID, "PUBLISH_RETRY", string(publishClassification(cause)), cause.Error(), nextRetryAt); err != nil {
 		return err
 	}
-	task, err := jobs.NewPublishTask(postID)
+	retryTask, err := jobs.NewPublishTask(postID)
 	if err != nil {
 		return err
 	}
-	if _, err := p.scheduler.Enqueue(task, asynq.ProcessIn(delay), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
+	if _, err := p.scheduler.Enqueue(retryTask, asynq.ProcessIn(delay), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
 		return fmt.Errorf("enqueue publish retry: %w", err)
 	}
 	log.Info().
@@ -372,6 +372,62 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 		Time("next_retry_at", nextRetryAt).
 		Msg("scheduling publish retry")
 	return nil
+}
+
+func (p *PublishProcessor) recordPermanentFailure(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, attempt *model.PublicationAttempt, cause error) error {
+	_, account, err := p.publications.GetPostTargetWithSocialAccount(ctx, targetID)
+	if err != nil {
+		return fmt.Errorf("get failed target platform: %w", err)
+	}
+	failureType, code, reason, response := failureDetails(cause)
+	var jobID *string
+	if id, ok := asynq.GetTaskID(ctx); ok && id != "" {
+		jobID = &id
+	}
+	if err := p.publications.RecordPermanentFailure(ctx, attempt.ID, postID, targetID, jobID, task.Type(), account.Platform, MaxAttempts, failureType, string(publishClassification(cause)), code, reason, response); err != nil {
+		log.Error().Err(err).Str("post_id", postID.String()).Str("target_id", targetID.String()).Int("attempt", attempt.AttemptCount).Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("failed to persist permanent publish failure")
+		return err
+	}
+	log.Error().Str("post_id", postID.String()).Str("target_id", targetID.String()).Int("attempt", attempt.AttemptCount).Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("publish job permanently failed")
+	return nil
+}
+
+var sensitiveValuePattern = regexp.MustCompile(`(?i)(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization[_-]?code|cookie)(\s*[:=]\s*)([^\s,;]+)`)
+
+func failureDetails(cause error) (string, string, string, []byte) {
+	classification := publishClassification(cause)
+	failureType := "UNKNOWN"
+	switch classification {
+	case connectors.ErrorPermanent:
+		failureType = "PLATFORM_ERROR"
+	case connectors.ErrorRetryable:
+		failureType = "PLATFORM_ERROR"
+	case connectors.ErrorAmbiguous:
+		failureType = "UNKNOWN"
+	}
+	code := "PUBLISH_FAILED"
+	statusCode := 0
+	var classified *connectors.ClassifiedError
+	if errors.As(cause, &classified) {
+		if classified.Code != "" {
+			code = classified.Code
+		}
+		statusCode = classified.StatusCode
+		if strings.Contains(strings.ToUpper(classified.Code), "AUTH") || strings.Contains(strings.ToUpper(classified.Code), "TOKEN") {
+			failureType = "AUTHENTICATION"
+		}
+	}
+	reason := redactSensitive(cause.Error())
+	metadata := map[string]any{"code": code, "classification": string(classification), "message": reason}
+	if statusCode != 0 {
+		metadata["status_code"] = statusCode
+	}
+	response, _ := json.Marshal(metadata)
+	return failureType, code, reason, response
+}
+
+func redactSensitive(value string) string {
+	return sensitiveValuePattern.ReplaceAllString(value, `${1}$2[REDACTED]`)
 }
 
 func (p *PublishProcessor) scheduleReconciliation(ctx context.Context, postID, targetID uuid.UUID) error {

@@ -20,6 +20,92 @@ type PublicationRepository struct {
 	db *pgxpool.Pool
 }
 
+// RecordPermanentFailure atomically finalizes the attempt and target and upserts
+// the durable terminal failure summary. post_target_id is the logical job key:
+// one Asynq task may contain several platform targets.
+func (r *PublicationRepository) RecordPermanentFailure(
+	ctx context.Context,
+	attemptID, postID, postTargetID uuid.UUID,
+	jobID *string,
+	taskType, platform string,
+	maxAttempts int,
+	failureType, failureClass, errorCode, failureReason string,
+	platformResponse []byte,
+) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin record permanent failure: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	now := time.Now()
+	var attemptCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT attempt_count FROM publication_attempts WHERE id = $1 FOR UPDATE
+	`, attemptID).Scan(&attemptCount); err != nil {
+		return fmt.Errorf("get failed publication attempt: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE publication_attempts
+		SET status = 'FAILED', error_class = $1, error_message = $2,
+			completed_at = $3, updated_at = $3, next_retry_at = NULL
+		WHERE id = $4 AND status IN ('PROCESSING', 'UNKNOWN', 'FAILED')
+	`, failureClass, failureReason, now, attemptID); err != nil {
+		return fmt.Errorf("finalize publication attempt: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE post_targets SET status = 'FAILED' WHERE id = $1
+	`, postTargetID); err != nil {
+		return fmt.Errorf("mark post target permanently failed: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO publication_attempt_failures (
+			publication_attempt_id, attempt_number, error_code, error_class,
+			error_message, platform_response, occurred_at
+		)
+		SELECT id, attempt_count, $2, $3, $4, $5, $6
+		FROM publication_attempts WHERE id = $1
+		ON CONFLICT (publication_attempt_id, attempt_number) DO UPDATE SET
+			error_code = EXCLUDED.error_code,
+			error_class = EXCLUDED.error_class,
+			error_message = EXCLUDED.error_message,
+			platform_response = EXCLUDED.platform_response,
+			occurred_at = EXCLUDED.occurred_at
+	`, attemptID, errorCode, failureClass, failureReason, platformResponse, now); err != nil {
+		return fmt.Errorf("record terminal attempt failure: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO dead_letter_jobs (
+			post_id, post_target_id, job_id, task_type, platform, attempts,
+			max_attempts, failure_reason, failure_type, platform_response,
+			first_failed_at, last_failed_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $11, $11)
+		ON CONFLICT (post_target_id) DO UPDATE SET
+			job_id = COALESCE(EXCLUDED.job_id, dead_letter_jobs.job_id),
+			task_type = EXCLUDED.task_type,
+			platform = EXCLUDED.platform,
+			attempts = EXCLUDED.attempts,
+			max_attempts = EXCLUDED.max_attempts,
+			failure_reason = EXCLUDED.failure_reason,
+			failure_type = EXCLUDED.failure_type,
+			platform_response = EXCLUDED.platform_response,
+			last_failed_at = EXCLUDED.last_failed_at,
+			updated_at = EXCLUDED.updated_at
+	`, postID, postTargetID, jobID, taskType, platform, attemptCount, maxAttempts,
+		failureReason, failureType, platformResponse, now); err != nil {
+		return fmt.Errorf("upsert dead-letter job: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit permanent failure: %w", err)
+	}
+	return nil
+}
+
 func NewPublicationRepository(db *pgxpool.Pool) *PublicationRepository {
 	return &PublicationRepository{db: db}
 }
@@ -212,6 +298,19 @@ func (r *PublicationRepository) MarkAttemptFailed(
 	if result.RowsAffected() == 0 {
 		return ErrAttemptStateConflict
 	}
+	if _, err := r.db.Exec(ctx, `
+		INSERT INTO publication_attempt_failures (
+			publication_attempt_id, attempt_number, error_code, error_class,
+			error_message, occurred_at
+		)
+		SELECT id, attempt_count, $1, error_class, $2, $3
+		FROM publication_attempts WHERE id = $4
+		ON CONFLICT (publication_attempt_id, attempt_number) DO UPDATE SET
+			error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message,
+			occurred_at = EXCLUDED.occurred_at
+	`, errorCode, errorMessage, now, attemptID); err != nil {
+		return fmt.Errorf("record failed attempt: %w", err)
+	}
 
 	return nil
 }
@@ -229,6 +328,19 @@ func (r *PublicationRepository) MarkAttemptRetrying(ctx context.Context, attempt
 	}
 	if result.RowsAffected() == 0 {
 		return ErrAttemptStateConflict
+	}
+	if _, err := r.db.Exec(ctx, `
+		INSERT INTO publication_attempt_failures (
+			publication_attempt_id, attempt_number, error_code, error_class,
+			error_message, occurred_at
+		)
+		SELECT id, attempt_count, $1, $2, $3, NOW()
+		FROM publication_attempts WHERE id = $4
+		ON CONFLICT (publication_attempt_id, attempt_number) DO UPDATE SET
+			error_code = EXCLUDED.error_code, error_class = EXCLUDED.error_class,
+			error_message = EXCLUDED.error_message, occurred_at = EXCLUDED.occurred_at
+	`, errorCode, errorClass, errorMessage, attemptID); err != nil {
+		return fmt.Errorf("record retryable attempt failure: %w", err)
 	}
 	return nil
 }

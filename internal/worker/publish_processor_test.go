@@ -100,6 +100,11 @@ func (s *recoveryStore) UpdatePostStatus(_ context.Context, _ uuid.UUID, status 
 	return nil
 }
 
+func (s *recoveryStore) RecordPermanentFailure(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID, _ *string, _ string, _ string, _ int, _ string, _ string, _ string, _ string, _ []byte) error {
+	s.attempt.Status = "FAILED"
+	return nil
+}
+
 type crashRecoveryConnector struct {
 	publishCalls   int
 	reconcileCalls int
@@ -300,6 +305,10 @@ func (s *crashFileStore) MarkPostTargetPublished(_ context.Context, _ uuid.UUID)
 }
 
 func (s *crashFileStore) UpdatePostStatus(context.Context, uuid.UUID, string) error {
+	return nil
+}
+
+func (s *crashFileStore) RecordPermanentFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *string, string, string, int, string, string, string, string, []byte) error {
 	return nil
 }
 

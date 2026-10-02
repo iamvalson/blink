@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,5 +36,29 @@ func TestRetryPolicyClassifiesAndBoundsAttempts(t *testing.T) {
 	}
 	if policy.ShouldRetry(permanent, 1) || policy.ShouldRetry(ambiguous, 1) {
 		t.Fatal("permanent and ambiguous errors must not use the direct retry path")
+	}
+}
+
+func TestFailureDetailsPreservePlatformMetadataWithoutSecrets(t *testing.T) {
+	err := connectors.NewClassifiedError(
+		connectors.ErrorPermanent,
+		"invalid_token",
+		errors.New("HTTP 401 access_token=secret refresh_token=refresh-secret invalid token"),
+	)
+	classified := err.(*connectors.ClassifiedError)
+	classified.StatusCode = 401
+
+	failureType, code, reason, response := failureDetails(err)
+	if failureType != "AUTHENTICATION" {
+		t.Fatalf("failure type = %q, want AUTHENTICATION", failureType)
+	}
+	if code != "invalid_token" {
+		t.Fatalf("error code = %q, want invalid_token", code)
+	}
+	if strings.Contains(reason, "secret") || strings.Contains(reason, "refresh-secret") {
+		t.Fatalf("failure reason contains a secret: %q", reason)
+	}
+	if !strings.Contains(string(response), `"status_code":401`) || !strings.Contains(string(response), "invalid_token") {
+		t.Fatalf("platform response did not preserve safe metadata: %s", response)
 	}
 }

@@ -31,6 +31,24 @@ type PublicationAttempt struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
+type DeadLetterJob struct {
+	ID               uuid.UUID      `json:"id"`
+	PostID           uuid.UUID      `json:"post_id"`
+	PostTargetID     uuid.UUID      `json:"post_target_id"`
+	JobID            *string        `json:"job_id,omitempty"`
+	TaskType         string         `json:"task_type"`
+	Platform         string         `json:"platform"`
+	Attempts         int            `json:"attempts"`
+	MaxAttempts      int            `json:"max_attempts"`
+	FailureReason    string         `json:"failure_reason"`
+	FailureType      string         `json:"failure_type"`
+	PlatformResponse map[string]any `json:"platform_response,omitempty"`
+	FirstFailedAt    time.Time      `json:"first_failed_at"`
+	LastFailedAt     time.Time      `json:"last_failed_at"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
 type OutboxEvent struct {
 	ID            uuid.UUID              `json:"id"`
 	AggregateType string                 `json:"aggregate_type"` // e.g., "post"

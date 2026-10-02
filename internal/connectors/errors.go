@@ -11,9 +11,10 @@ const (
 )
 
 type ClassifiedError struct {
-	Class ErrorClass
-	Code  string
-	Err   error
+	Class      ErrorClass
+	Code       string
+	StatusCode int
+	Err        error
 }
 
 func (e *ClassifiedError) Error() string { return e.Err.Error() }
@@ -42,7 +43,8 @@ func HTTPError(status int, message string) error {
 	if status == 429 || status >= 500 {
 		class = ErrorRetryable
 	}
-	return NewClassifiedError(class, "HTTP_ERROR", errors.New(message))
+	classified := &ClassifiedError{Class: class, Code: "HTTP_ERROR", StatusCode: status, Err: errors.New(message)}
+	return classified
 }
 
 var (
