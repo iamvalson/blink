@@ -49,7 +49,7 @@ func (s *recoveryStore) GetPostTargetWithSocialAccount(context.Context, uuid.UUI
 }
 
 func (s *recoveryStore) MarkAttemptProcessing(context.Context, uuid.UUID) error {
-	if s.attempt.Status != "PENDING" && s.attempt.Status != "UNKNOWN" {
+	if s.attempt.Status != "PENDING" && s.attempt.Status != "UNKNOWN" && s.attempt.Status != "RETRYING" {
 		return errors.New("attempt is not claimable")
 	}
 	s.attempt.Status = "PROCESSING"
@@ -81,6 +81,15 @@ func (s *recoveryStore) MarkAttemptFailed(context.Context, uuid.UUID, string, st
 	return nil
 }
 
+func (s *recoveryStore) MarkAttemptRetrying(_ context.Context, _ uuid.UUID, code, class, message string, nextRetryAt time.Time) error {
+	s.attempt.Status = "RETRYING"
+	s.attempt.ErrorCode = &code
+	s.attempt.ErrorClass = &class
+	s.attempt.ErrorMessage = &message
+	s.attempt.NextRetryAt = &nextRetryAt
+	return nil
+}
+
 func (s *recoveryStore) MarkPostTargetPublished(context.Context, uuid.UUID) error {
 	s.target.Status = "PUBLISHED"
 	return nil
@@ -88,6 +97,11 @@ func (s *recoveryStore) MarkPostTargetPublished(context.Context, uuid.UUID) erro
 
 func (s *recoveryStore) UpdatePostStatus(_ context.Context, _ uuid.UUID, status string) error {
 	s.post.Status = status
+	return nil
+}
+
+func (s *recoveryStore) RecordPermanentFailure(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID, _ *string, _ string, _ string, _ int, _ string, _ string, _ string, _ string, _ []byte) error {
+	s.attempt.Status = "FAILED"
 	return nil
 }
 
@@ -241,7 +255,7 @@ func (s *crashFileStore) MarkAttemptProcessing(_ context.Context, _ uuid.UUID) e
 	if err != nil {
 		return err
 	}
-	if state.Status != "PENDING" && state.Status != "UNKNOWN" && state.Status != "FAILED" {
+	if state.Status != "PENDING" && state.Status != "UNKNOWN" && state.Status != "RETRYING" && state.Status != "FAILED" {
 		return errors.New("attempt is not claimable")
 	}
 	state.Status = "PROCESSING"
@@ -277,6 +291,10 @@ func (s *crashFileStore) MarkAttemptFailed(context.Context, uuid.UUID, string, s
 	return nil
 }
 
+func (s *crashFileStore) MarkAttemptRetrying(context.Context, uuid.UUID, string, string, string, time.Time) error {
+	return nil
+}
+
 func (s *crashFileStore) MarkPostTargetPublished(_ context.Context, _ uuid.UUID) error {
 	state, err := s.read()
 	if err != nil {
@@ -287,6 +305,10 @@ func (s *crashFileStore) MarkPostTargetPublished(_ context.Context, _ uuid.UUID)
 }
 
 func (s *crashFileStore) UpdatePostStatus(context.Context, uuid.UUID, string) error {
+	return nil
+}
+
+func (s *crashFileStore) RecordPermanentFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *string, string, string, int, string, string, string, string, []byte) error {
 	return nil
 }
 

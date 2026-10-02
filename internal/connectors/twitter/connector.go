@@ -129,7 +129,7 @@ func (c *Connector) Publish(ctx context.Context, token string, attemptID string,
 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("x api error: %d %s", resp.StatusCode, string(body))
+		return "", "", connectors.HTTPError(resp.StatusCode, fmt.Sprintf("x api error: %d %s", resp.StatusCode, string(body)))
 	}
 
 	// Paarse response

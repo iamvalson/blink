@@ -2,10 +2,15 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -22,6 +27,11 @@ type PublishProcessor struct {
 	publications  publicationStore
 	connectors    map[string]connectors.PlatformConnector
 	encryptionKey string
+	scheduler     publishScheduler
+}
+
+type publishScheduler interface {
+	Enqueue(*asynq.Task, ...asynq.Option) (string, error)
 }
 
 type publicationStore interface {
@@ -34,8 +44,10 @@ type publicationStore interface {
 	ResetAttemptForRetry(context.Context, uuid.UUID) error
 	MarkAttemptSucceeded(context.Context, uuid.UUID, string, string) error
 	MarkAttemptFailed(context.Context, uuid.UUID, string, string) error
+	MarkAttemptRetrying(context.Context, uuid.UUID, string, string, string, time.Time) error
 	MarkPostTargetPublished(context.Context, uuid.UUID) error
 	UpdatePostStatus(context.Context, uuid.UUID, string) error
+	RecordPermanentFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *string, string, string, int, string, string, string, string, []byte) error
 }
 
 func NewPublishProcessor(
@@ -43,12 +55,18 @@ func NewPublishProcessor(
 	publicationsRepo publicationStore,
 	platformConnectors map[string]connectors.PlatformConnector,
 	encryptionKey string,
+	schedulers ...publishScheduler,
 ) *PublishProcessor {
+	var scheduler publishScheduler
+	if len(schedulers) > 0 {
+		scheduler = schedulers[0]
+	}
 	return &PublishProcessor{
 		posts:         posts,
 		publications:  publicationsRepo,
 		connectors:    platformConnectors,
 		encryptionKey: encryptionKey,
+		scheduler:     scheduler,
 	}
 }
 
@@ -104,13 +122,22 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 			if firstErr == nil {
 				firstErr = err
 			}
+			if publishClassification(err) == connectors.ErrorRetryable {
+				if scheduleErr := p.scheduleRetry(ctx, job.PostID, target.ID, task, err); scheduleErr != nil && firstErr == err {
+					firstErr = scheduleErr
+				}
+			} else if publishClassification(err) == connectors.ErrorAmbiguous {
+				if scheduleErr := p.scheduleReconciliation(ctx, job.PostID, target.ID); scheduleErr != nil && firstErr == err {
+					firstErr = scheduleErr
+				}
+			}
 		}
 	}
 
-	// Leave unresolved targets durable and let Asynq redeliver the job. In
-	// particular, an external call may have succeeded before this process died.
 	if firstErr != nil {
-		return firstErr
+		// Blink schedules business retries explicitly; returning nil prevents
+		// Asynq from creating a second retry sequence.
+		return nil
 	}
 
 	if err := p.updatePostStatus(ctx, job.PostID, "PUBLISHED"); err != nil {
@@ -130,9 +157,15 @@ func (p *PublishProcessor) publishToTarget(
 	if err != nil {
 		return fmt.Errorf("get publication attempt: %w", err)
 	}
+	if attempt.Status == "SUCCEEDED" {
+		return p.publications.MarkPostTargetPublished(ctx, target.ID)
+	}
+	if attempt.AttemptCount >= MaxAttempts && attempt.Status != "PROCESSING" && attempt.Status != "UNKNOWN" {
+		return newPublishError(connectors.ErrorPermanent, errors.New("maximum publication attempts reached"))
+	}
 
 	recoveryRequired := attempt.Status == "PROCESSING" || attempt.Status == "UNKNOWN"
-	if attempt.Status == "PENDING" || attempt.Status == "FAILED" {
+	if attempt.Status == "PENDING" || attempt.Status == "RETRYING" || attempt.Status == "FAILED" {
 		if err := p.publications.MarkAttemptProcessing(ctx, attempt.ID); err != nil {
 			if err == storage.ErrAttemptNotClaimed {
 				return fmt.Errorf("attempt claim lost; retry job")
@@ -153,7 +186,7 @@ func (p *PublishProcessor) publishToTarget(
 		if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
 			log.Error().Err(markErr).Msg("Failed to mark attempt failed")
 		}
-		return fmt.Errorf("decrypt access token: %w", err)
+		return newPublishError(connectors.ErrorPermanent, fmt.Errorf("decrypt access token: %w", err))
 	}
 
 	// Get connector for platform
@@ -163,7 +196,7 @@ func (p *PublishProcessor) publishToTarget(
 		if err := p.publications.MarkAttemptFailed(ctx, attempt.ID, "UNKNOWN_PLATFORM", errMsg); err != nil {
 			log.Error().Err(err).Msg("Failed to mark attempt failed")
 		}
-		return fmt.Errorf("%s", errMsg)
+		return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
 	}
 
 	// Publish
@@ -270,16 +303,26 @@ func (p *PublishProcessor) publishToTarget(
 
 		mediaID, uploadErr := connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaType)
 		if uploadErr != nil {
-			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "UPLOAD_OUTCOME_UNKNOWN", uploadErr.Error())
-			return fmt.Errorf("upload media to platform: %w", uploadErr)
+			classification := publishClassification(uploadErr)
+			if classification == connectors.ErrorAmbiguous {
+				_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "UPLOAD_OUTCOME_UNKNOWN", uploadErr.Error())
+			} else if classification == connectors.ErrorPermanent {
+				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "UPLOAD_FAILED", uploadErr.Error())
+			}
+			return newPublishError(classification, fmt.Errorf("upload media to platform: %w", uploadErr))
 		}
 		mediaIDs = append(mediaIDs, mediaID)
 	}
 
 	publicURL, platformPostID, err := connector.Publish(ctx, accessToken, attempt.ID.String(), input.Caption, mediaIDs...)
 	if err != nil {
-		_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "PUBLISH_OUTCOME_UNKNOWN", err.Error())
-		return fmt.Errorf("publish to platform: %w", err)
+		classification := publishClassification(err)
+		if classification == connectors.ErrorAmbiguous {
+			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "PUBLISH_OUTCOME_UNKNOWN", err.Error())
+		} else if classification == connectors.ErrorPermanent {
+			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "PUBLISH_FAILED", err.Error())
+		}
+		return newPublishError(classification, fmt.Errorf("publish to platform: %w", err))
 	}
 
 	// Mark as succeeded
@@ -292,6 +335,120 @@ func (p *PublishProcessor) publishToTarget(
 		return fmt.Errorf("mark target published: %w", err)
 	}
 
+	return nil
+}
+
+func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, cause error) error {
+	attempt, err := p.publications.GetPublicationAttempt(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if !retryPolicy.ShouldRetry(cause, attempt.AttemptCount) {
+		return p.recordPermanentFailure(ctx, postID, targetID, task, attempt, cause)
+	}
+	if p.scheduler == nil {
+		return fmt.Errorf("retry scheduler is not configured")
+	}
+	delay := retryPolicy.NextRetryDelay(attempt.AttemptCount)
+	nextRetryAt := time.Now().Add(delay)
+	if err := p.publications.MarkAttemptRetrying(ctx, attempt.ID, "PUBLISH_RETRY", string(publishClassification(cause)), cause.Error(), nextRetryAt); err != nil {
+		return err
+	}
+	retryTask, err := jobs.NewPublishTask(postID)
+	if err != nil {
+		return err
+	}
+	if _, err := p.scheduler.Enqueue(retryTask, asynq.ProcessIn(delay), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
+		return fmt.Errorf("enqueue publish retry: %w", err)
+	}
+	log.Info().
+		Str("publication_attempt_id", attempt.ID.String()).
+		Str("post_id", postID.String()).
+		Str("target_id", targetID.String()).
+		Int("attempt_count", attempt.AttemptCount).
+		Int("max_attempts", MaxAttempts).
+		Str("error_class", string(publishClassification(cause))).
+		Dur("retry_delay", delay).
+		Time("next_retry_at", nextRetryAt).
+		Msg("scheduling publish retry")
+	return nil
+}
+
+func (p *PublishProcessor) recordPermanentFailure(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, attempt *model.PublicationAttempt, cause error) error {
+	_, account, err := p.publications.GetPostTargetWithSocialAccount(ctx, targetID)
+	if err != nil {
+		return fmt.Errorf("get failed target platform: %w", err)
+	}
+	failureType, code, reason, response := failureDetails(cause)
+	var jobID *string
+	if id, ok := asynq.GetTaskID(ctx); ok && id != "" {
+		jobID = &id
+	}
+	if err := p.publications.RecordPermanentFailure(ctx, attempt.ID, postID, targetID, jobID, task.Type(), account.Platform, MaxAttempts, failureType, string(publishClassification(cause)), code, reason, response); err != nil {
+		log.Error().Err(err).Str("post_id", postID.String()).Str("target_id", targetID.String()).Int("attempt", attempt.AttemptCount).Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("failed to persist permanent publish failure")
+		return err
+	}
+	log.Error().Str("post_id", postID.String()).Str("target_id", targetID.String()).Int("attempt", attempt.AttemptCount).Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("publish job permanently failed")
+	return nil
+}
+
+var sensitiveValuePattern = regexp.MustCompile(`(?i)(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization[_-]?code|cookie)(\s*[:=]\s*)([^\s,;]+)`)
+
+func failureDetails(cause error) (string, string, string, []byte) {
+	classification := publishClassification(cause)
+	failureType := "UNKNOWN"
+	switch classification {
+	case connectors.ErrorPermanent:
+		failureType = "PLATFORM_ERROR"
+	case connectors.ErrorRetryable:
+		failureType = "PLATFORM_ERROR"
+	case connectors.ErrorAmbiguous:
+		failureType = "UNKNOWN"
+	}
+	code := "PUBLISH_FAILED"
+	statusCode := 0
+	var classified *connectors.ClassifiedError
+	if errors.As(cause, &classified) {
+		if classified.Code != "" {
+			code = classified.Code
+		}
+		statusCode = classified.StatusCode
+		if strings.Contains(strings.ToUpper(classified.Code), "AUTH") || strings.Contains(strings.ToUpper(classified.Code), "TOKEN") {
+			failureType = "AUTHENTICATION"
+		}
+	}
+	reason := redactSensitive(cause.Error())
+	metadata := map[string]any{"code": code, "classification": string(classification), "message": reason}
+	if statusCode != 0 {
+		metadata["status_code"] = statusCode
+	}
+	response, _ := json.Marshal(metadata)
+	return failureType, code, reason, response
+}
+
+func redactSensitive(value string) string {
+	return sensitiveValuePattern.ReplaceAllString(value, `${1}$2[REDACTED]`)
+}
+
+func (p *PublishProcessor) scheduleReconciliation(ctx context.Context, postID, targetID uuid.UUID) error {
+	if p.scheduler == nil {
+		return fmt.Errorf("reconciliation scheduler is not configured")
+	}
+	attempt, err := p.publications.GetPublicationAttempt(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if attempt.Status != "UNKNOWN" || attempt.ErrorCode == nil || !strings.HasSuffix(*attempt.ErrorCode, "OUTCOME_UNKNOWN") {
+		return nil
+	}
+	task, err := jobs.NewPublishTask(postID)
+	if err != nil {
+		return err
+	}
+	if _, err := p.scheduler.Enqueue(task, asynq.ProcessIn(0), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
+		return fmt.Errorf("enqueue reconciliation: %w", err)
+	}
+	log.Info().Str("publication_attempt_id", attempt.ID.String()).Str("post_id", postID.String()).Msg("scheduling publication reconciliation")
 	return nil
 }
 

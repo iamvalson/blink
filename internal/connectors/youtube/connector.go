@@ -131,7 +131,7 @@ func (c *Connector) UploadMedia(
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("upload init failed: %d %s", resp.StatusCode, string(body))
+		return "", connectors.HTTPError(resp.StatusCode, fmt.Sprintf("upload init failed: %s", string(body)))
 	}
 
 	uploadURL := resp.Header.Get("Location")
@@ -155,7 +155,7 @@ func (c *Connector) UploadMedia(
 
 	if uploadResp.StatusCode != http.StatusOK && uploadResp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(uploadResp.Body)
-		return "", fmt.Errorf("chunk upload failed: %d %s", uploadResp.StatusCode, string(body))
+		return "", connectors.HTTPError(uploadResp.StatusCode, fmt.Sprintf("chunk upload failed: %s", string(body)))
 	}
 
 	var result struct {
@@ -240,7 +240,7 @@ func (c *Connector) Publish(
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("update metadata failed: %d %s", resp.StatusCode, string(respBody))
+		return "", "", connectors.HTTPError(resp.StatusCode, fmt.Sprintf("update metadata failed: %s", string(respBody)))
 	}
 
 	publicURL := fmt.Sprintf(

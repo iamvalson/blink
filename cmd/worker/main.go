@@ -56,13 +56,12 @@ func main() {
 	redisURL = strings.TrimPrefix(redisURL, "redis://")
 	redisURL = strings.TrimPrefix(redisURL, "rediss://")
 
-	// Create Asynq client for testing connection
-	testClient := asynq.NewClient(asynq.RedisClientOpt{Addr: redisURL})
-	defer testClient.Close()
-
-	if err := testClient.Ping(); err != nil {
+	// The worker uses the same client for explicit, durable business retries.
+	retryClient, err := jobs.NewClient(redisURL)
+	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to connect to Redis")
 	}
+	defer retryClient.Close()
 
 	log.Info().Str("addr", redisURL).Msg("Connected to Redis")
 
@@ -93,9 +92,9 @@ func main() {
 	}
 
 	youtubeCfg := youtube.YouTubeConfig{
-		ClientID:    os.Getenv("YOUTUBE_CLIENT_ID"),
+		ClientID:     os.Getenv("YOUTUBE_CLIENT_ID"),
 		ClientSecret: os.Getenv("YOUTUBE_CLIENT_SECRET"),
-		CallbackURL: os.Getenv("YOUTUBE_CALLBACK_URL"),
+		CallbackURL:  os.Getenv("YOUTUBE_CALLBACK_URL"),
 	}
 	youtubeConnector := youtube.New(youtubeCfg)
 
@@ -116,7 +115,7 @@ func main() {
 
 	// Create and register handler
 	mux := asynq.NewServeMux()
-	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey)
+	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey, retryClient)
 
 	mux.HandleFunc(jobs.TypePublishPost, processor.ProcessPublishJob)
 
