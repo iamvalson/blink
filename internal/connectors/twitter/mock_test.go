@@ -23,13 +23,13 @@ func TestMockPublish(t *testing.T) {
 	conn := NewMock()
 
 	// 1. Should fail when token is empty
-	_, _, err := conn.Publish(context.Background(), "", "Test tweet")
+	_, _, err := conn.Publish(context.Background(), "", "attempt-123", "Test tweet")
 	if err == nil {
 		t.Fatal("expected error when token is empty, got nil")
 	}
 
 	// 2. Should succeed with valid token
-	url, postID, err := conn.Publish(context.Background(), "mock_access_token", "Hello Twitter from Mock")
+	url, postID, err := conn.Publish(context.Background(), "mock_access_token", "attempt-123", "Hello Twitter from Mock")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestMockUploadMedia(t *testing.T) {
 	conn := NewMock()
 	media := bytes.NewReader([]byte("fake image data"))
 
-	mediaID, err := conn.UploadMedia(context.Background(), "mock-token", media, "image/png")
+	mediaID, err := conn.UploadMedia(context.Background(), "mock-token", "test.png", media, "image/png")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

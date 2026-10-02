@@ -67,12 +67,12 @@ func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthPara
 }
 
 // UploadMedia uploads media to Twitter and returns media ID
-func (c *Connector) UploadMedia(ctx context.Context, token string, media io.Reader, mediaType string) (mediaID string, err error) {
+func (c *Connector) UploadMedia(ctx context.Context, token string, attemptID string, media io.Reader, mediaType string) (mediaID string, err error) {
 	return "media_placeholder", nil
 }
 
 // Publish posts a tweet
-func (c *Connector) Publish(ctx context.Context, token string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error) {
+func (c *Connector) Publish(ctx context.Context, token string, attemptID string, caption string, mediaIDs ...string) (publicURL string, platformPostID string, err error) {
 	if token == "" {
 		return "", "", fmt.Errorf("no access token set")
 	}
@@ -148,6 +148,12 @@ func (c *Connector) Publish(ctx context.Context, token string, caption string, m
 func (c *Connector) GetStatus(ctx context.Context, platformPostID string) (status string, publicURL string, err error) {
 	publicURL = fmt.Sprintf("https://x.com/i/web/status/%s", platformPostID)
 	return "published", publicURL, nil
+}
+
+// ReconcilePublish reports an ambiguous result for X. The current X API integration
+// has no reliable lookup keyed by the stable publication ID, so republishing is unsafe.
+func (c *Connector) ReconcilePublish(ctx context.Context, token string, platformUserID string, attemptID string, caption string) (connectors.ReconciliationResult, error) {
+	return connectors.ReconciliationResult{Outcome: connectors.ReconciliationUnknown}, nil
 }
 
 // GetOAuthConfig returns the OAuth config (needed by AuthHandler)

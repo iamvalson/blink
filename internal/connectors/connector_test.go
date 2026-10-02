@@ -24,7 +24,7 @@ func TestMockConnectorAuthenticate(t *testing.T) {
 func TestMockConnectorPublish(t *testing.T) {
 	mock := NewMockConnector()
 
-	url, postID, err := mock.Publish(context.Background(), "mock_token", "Hello World", "media_123")
+	url, postID, err := mock.Publish(context.Background(), "mock_token", "attempt-123", "Hello World", "media_123")
 
 	if err != nil {
 		t.Fatalf("Publish failed: %v", err)
@@ -44,7 +44,7 @@ func TestMockConnectorUploadMedia(t *testing.T) {
 
 	media := bytes.NewReader([]byte("fake image data"))
 
-	mediaID, err := mock.UploadMedia(context.Background(), "mock-token", media, "image/png")
+	mediaID, err := mock.UploadMedia(context.Background(), "mock-token", "test.png", media, "image/png")
 
 	if err != nil {
 		t.Fatalf("UploadMedia failed: %v", err)
@@ -59,7 +59,7 @@ func TestMockConnectorCustomBehaviour(t *testing.T) {
 	mock := NewMockConnector()
 
 	// Override behaviour for this test
-	mock.PublishFn = func(ctx context.Context, token string, caption string, mediaIDs ...string) (string, string, error) {
+	mock.PublishFn = func(ctx context.Context, token string, attemptID string, caption string, mediaIDs ...string) (string, string, error) {
 		if caption == "error" {
 			return "", "", ErrPublishFailed
 		}
@@ -67,7 +67,7 @@ func TestMockConnectorCustomBehaviour(t *testing.T) {
 	}
 
 	// Should work
-	_, postID, err := mock.Publish(context.Background(), "mock_token", "hello", "media_1")
+	_, postID, err := mock.Publish(context.Background(), "mock_token", "attempt-123", "hello", "media_1")
 	if err != nil {
 		t.Fatalf("Publish should succeed")
 	}
@@ -76,7 +76,7 @@ func TestMockConnectorCustomBehaviour(t *testing.T) {
 	}
 
 	// Should fail
-	_, _, err = mock.Publish(context.Background(), "mock_token", "error", "media_1")
+	_, _, err = mock.Publish(context.Background(), "mock_token", "attempt-123", "error", "media_1")
 	if err == nil {
 		t.Fatalf("Publish should fail with 'error' caption")
 	}

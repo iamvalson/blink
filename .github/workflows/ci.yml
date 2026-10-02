@@ -55,6 +55,14 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Apply database migrations
+        env:
+          DATABASE_URL: postgres://blink:devpass@localhost:5432/blink_db
+        run: |
+          for migration in migrations/*_up.sql; do
+            psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$migration"
+          done
+
       - name: Format check
         run: go fmt ./...
 
@@ -71,4 +79,6 @@ jobs:
         run: go test -v -race ./...
 
       - name: Build
-        run: go build -o bin/api cmd/api/main.go
+        run: |
+          go build -o bin/api cmd/api/main.go
+          go build -o bin/worker cmd/worker/main.go

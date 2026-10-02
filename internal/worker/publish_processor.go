@@ -18,219 +18,282 @@ import (
 )
 
 type PublishProcessor struct {
-    posts        *storage.PostRepository
-    publications *storage.PublicationRepository
-    connectors   map[string]connectors.PlatformConnector
-    encryptionKey string
+	posts         *storage.PostRepository
+	publications  publicationStore
+	connectors    map[string]connectors.PlatformConnector
+	encryptionKey string
+}
+
+type publicationStore interface {
+	GetPostForPublishing(context.Context, uuid.UUID) (*model.Post, error)
+	GetPendingPostTargets(context.Context, uuid.UUID) ([]model.PostTarget, error)
+	GetPublicationAttempt(context.Context, uuid.UUID) (*model.PublicationAttempt, error)
+	GetPostTargetWithSocialAccount(context.Context, uuid.UUID) (*model.PostTarget, *model.SocialAccount, error)
+	MarkAttemptProcessing(context.Context, uuid.UUID) error
+	MarkAttemptUnknown(context.Context, uuid.UUID, string, string) error
+	ResetAttemptForRetry(context.Context, uuid.UUID) error
+	MarkAttemptSucceeded(context.Context, uuid.UUID, string, string) error
+	MarkAttemptFailed(context.Context, uuid.UUID, string, string) error
+	MarkPostTargetPublished(context.Context, uuid.UUID) error
+	UpdatePostStatus(context.Context, uuid.UUID, string) error
 }
 
 func NewPublishProcessor(
-    posts *storage.PostRepository,
-    publications *storage.PublicationRepository,
-    platformConnectors map[string]connectors.PlatformConnector,
-    encryptionKey string,
+	posts *storage.PostRepository,
+	publicationsRepo publicationStore,
+	platformConnectors map[string]connectors.PlatformConnector,
+	encryptionKey string,
 ) *PublishProcessor {
-    return &PublishProcessor{
-        posts:        posts,
-        publications: publications,
-        connectors:   platformConnectors,
-        encryptionKey: encryptionKey,
-    }
+	return &PublishProcessor{
+		posts:         posts,
+		publications:  publicationsRepo,
+		connectors:    platformConnectors,
+		encryptionKey: encryptionKey,
+	}
 }
 
 // ProcessPublishJob handles a POST_CREATED event and publishes to all targets
 func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Task) error {
-    job, err := jobs.ParsePublishJob(task.Payload())
-    if err != nil {
-        return fmt.Errorf("parse publish job: %w", err)
-    }
+	job, err := jobs.ParsePublishJob(task.Payload())
+	if err != nil {
+		return fmt.Errorf("parse publish job: %w", err)
+	}
 
-    log.Info().
-        Str("post_id", job.PostID.String()).
-        Msg("Processing publish job")
+	log.Info().
+		Str("post_id", job.PostID.String()).
+		Msg("Processing publish job")
 
-    // Load post
-    post, err := p.publications.GetPostForPublishing(ctx, job.PostID)
-    if err != nil {
-        return fmt.Errorf("get post: %w", err)
-    }
+	// Load post
+	post, err := p.publications.GetPostForPublishing(ctx, job.PostID)
+	if err != nil {
+		return fmt.Errorf("get post: %w", err)
+	}
 
-    // Check if post is already published
-    if post.Status != "QUEUED" {
-        log.Info().
-            Str("post_id", job.PostID.String()).
-            Str("status", post.Status).
-            Msg("Post not in QUEUED status, skipping")
-        return nil
-    }
+	// Check if post is already published
+	if post.Status != "QUEUED" {
+		log.Info().
+			Str("post_id", job.PostID.String()).
+			Str("status", post.Status).
+			Msg("Post not in QUEUED status, skipping")
+		return nil
+	}
 
-    // Get pending targets
-    targets, err := p.publications.GetPendingPostTargets(ctx, job.PostID)
-    if err != nil {
-        return fmt.Errorf("get pending targets: %w", err)
-    }
+	// Get pending targets
+	targets, err := p.publications.GetPendingPostTargets(ctx, job.PostID)
+	if err != nil {
+		return fmt.Errorf("get pending targets: %w", err)
+	}
 
-    if len(targets) == 0 {
-        log.Warn().
-            Str("post_id", job.PostID.String()).
-            Msg("No pending targets found")
-        return nil
-    }
+	if len(targets) == 0 {
+		log.Warn().
+			Str("post_id", job.PostID.String()).
+			Msg("No pending targets found")
+		return nil
+	}
 
-    // Publish to each target
-    successCount := 0
-    failureCount := 0
+	// Publish to each target
+	var firstErr error
 
-    for _, target := range targets {
-        if err := p.publishToTarget(ctx, post, &target); err != nil {
-            log.Error().
-                Err(err).
-                Str("post_id", job.PostID.String()).
-                Str("target_id", target.ID.String()).
-                Msg("Failed to publish to target")
-            failureCount++
-        } else {
-            successCount++
-        }
-    }
+	for _, target := range targets {
+		if err := p.publishToTarget(ctx, post, &target); err != nil {
+			log.Error().
+				Err(err).
+				Str("post_id", job.PostID.String()).
+				Str("target_id", target.ID.String()).
+				Msg("Failed to publish to target")
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
 
-    // Update post status based on results
-    if failureCount == 0 {
-        // All succeeded
-        if err := p.updatePostStatus(ctx, job.PostID, "PUBLISHED"); err != nil {
-            log.Error().Err(err).Msg("Failed to update post status to PUBLISHED")
-        }
-    } else if successCount > 0 {
-        // Some succeeded
-        if err := p.updatePostStatus(ctx, job.PostID, "PARTIALLY_PUBLISHED"); err != nil {
-            log.Error().Err(err).Msg("Failed to update post status to PARTIALLY_PUBLISHED")
-        }
-    } else {
-        // All failed
-        if err := p.updatePostStatus(ctx, job.PostID, "FAILED"); err != nil {
-            log.Error().Err(err).Msg("Failed to update post status to FAILED")
-        }
-    }
+	// Leave unresolved targets durable and let Asynq redeliver the job. In
+	// particular, an external call may have succeeded before this process died.
+	if firstErr != nil {
+		return firstErr
+	}
 
-    return nil
+	if err := p.updatePostStatus(ctx, job.PostID, "PUBLISHED"); err != nil {
+		log.Error().Err(err).Msg("Failed to update post status to PUBLISHED")
+	}
+
+	return nil
 }
 
 func (p *PublishProcessor) publishToTarget(
-    ctx context.Context,
-    post *model.Post,
-    target *model.PostTarget,
+	ctx context.Context,
+	post *model.Post,
+	target *model.PostTarget,
 ) error {
-    // Get publication attempt
-    attempt, err := p.publications.GetPublicationAttempt(ctx, target.ID)
-    if err != nil {
-        return fmt.Errorf("get publication attempt: %w", err)
-    }
+	// Get publication attempt
+	attempt, err := p.publications.GetPublicationAttempt(ctx, target.ID)
+	if err != nil {
+		return fmt.Errorf("get publication attempt: %w", err)
+	}
 
-    // Mark as processing
-    if err := p.publications.MarkAttemptProcessing(ctx, attempt.ID); err != nil {
-        return fmt.Errorf("mark attempt processing: %w", err)
-    }
+	recoveryRequired := attempt.Status == "PROCESSING" || attempt.Status == "UNKNOWN"
+	if attempt.Status == "PENDING" || attempt.Status == "FAILED" {
+		if err := p.publications.MarkAttemptProcessing(ctx, attempt.ID); err != nil {
+			if err == storage.ErrAttemptNotClaimed {
+				return fmt.Errorf("attempt claim lost; retry job")
+			}
+			return fmt.Errorf("mark attempt processing: %w", err)
+		}
+		attempt.Status = "PROCESSING"
+	}
 
-    // Get target with social account
-    _, account, err := p.publications.GetPostTargetWithSocialAccount(ctx, target.ID)
-    if err != nil {
-        return fmt.Errorf("get social account: %w", err)
-    }
+	// Get target with social account
+	_, account, err := p.publications.GetPostTargetWithSocialAccount(ctx, target.ID)
+	if err != nil {
+		return fmt.Errorf("get social account: %w", err)
+	}
 
-    accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
-    if err != nil {
-        if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
-            log.Error().Err(markErr).Msg("Failed to mark attempt failed")
-        }
-        return fmt.Errorf("decrypt access token: %w", err)
-    }
+	accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
+	if err != nil {
+		if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
+			log.Error().Err(markErr).Msg("Failed to mark attempt failed")
+		}
+		return fmt.Errorf("decrypt access token: %w", err)
+	}
 
-    // Get connector for platform
-    connector, ok := p.connectors[account.Platform]
-    if !ok {
-        errMsg := fmt.Sprintf("no connector for platform: %s", account.Platform)
-        if err := p.publications.MarkAttemptFailed(ctx, attempt.ID, "UNKNOWN_PLATFORM", errMsg); err != nil {
-            log.Error().Err(err).Msg("Failed to mark attempt failed")
-        }
-        return fmt.Errorf("%s", errMsg)
-    }
+	// Get connector for platform
+	connector, ok := p.connectors[account.Platform]
+	if !ok {
+		errMsg := fmt.Sprintf("no connector for platform: %s", account.Platform)
+		if err := p.publications.MarkAttemptFailed(ctx, attempt.ID, "UNKNOWN_PLATFORM", errMsg); err != nil {
+			log.Error().Err(err).Msg("Failed to mark attempt failed")
+		}
+		return fmt.Errorf("%s", errMsg)
+	}
 
-    // Publish
-    caption := ""
-    if post.Caption != nil {
-        caption = *post.Caption
-    }
-    input := model.PublishInput{
-        Caption:   caption,
-        MediaURL:  post.MediaURL,
-        MediaType: post.MediaType,
-    }
+	// Publish
+	caption := ""
+	if post.Caption != nil {
+		caption = *post.Caption
+	}
 
-    var mediaIDs []string
-    if input.MediaURL != nil && *input.MediaURL != "" {
-        req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, *input.MediaURL, nil)
-        if reqErr != nil {
-            return fmt.Errorf("create download request: %w", reqErr)
-        }
-        req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	if attempt.Status == "SUCCEEDED" {
+		return p.publications.MarkPostTargetPublished(ctx, target.ID)
+	}
 
-        resp, respErr := http.DefaultClient.Do(req)
-        if respErr != nil {
-            return fmt.Errorf("download media: %w", respErr)
-        }
-        defer resp.Body.Close()
+	// PROCESSING and UNKNOWN both mean the previous external call may have
+	// been accepted. Reconcile before allowing another publish request.
+	if recoveryRequired {
+		log.Info().Str("attempt_id", attempt.ID.String()).Msg("Reconciling ambiguous publication attempt")
 
-        if resp.StatusCode != http.StatusOK {
-            return fmt.Errorf("download media failed: %d", resp.StatusCode)
-        }
+		reconciliation, recErr := connector.ReconcilePublish(ctx, accessToken, account.PlatformUserID, attempt.ID.String(), caption)
+		if recErr != nil {
+			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "RECONCILIATION_FAILED", recErr.Error())
+			return fmt.Errorf("reconciliation error: %w", recErr)
+		}
 
-        mediaType := "application/octet-stream"
-        if input.MediaType != nil {
-            mediaType = *input.MediaType
-        }
+		switch reconciliation.Outcome {
+		case connectors.ReconciliationFound:
+			if err := p.publications.MarkAttemptSucceeded(ctx, attempt.ID, reconciliation.PlatformPostID, reconciliation.PublicURL); err != nil {
+				return fmt.Errorf("mark reconciled attempt succeeded: %w", err)
+			}
+			if err := p.publications.MarkPostTargetPublished(ctx, target.ID); err != nil {
+				return fmt.Errorf("mark target published: %w", err)
+			}
+			return nil
+		case connectors.ReconciliationUnknown:
+			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "RECONCILIATION_UNKNOWN", "platform could not prove whether the publication exists")
+			return fmt.Errorf("publication outcome remains unknown")
+		case connectors.ReconciliationNotFoundConfirmed:
+			if err := p.publications.ResetAttemptForRetry(ctx, attempt.ID); err != nil {
+				return fmt.Errorf("reset attempt after reconciliation: %w", err)
+			}
+			attempt.Status = "PENDING"
+			recoveryRequired = false
+		default:
+			return fmt.Errorf("unsupported reconciliation outcome: %q", reconciliation.Outcome)
+		}
+	}
 
-        tempFile, err := os.CreateTemp("", "upload-*.tmp")
-        if err != nil {
-            return fmt.Errorf("create temp file: %w", err)
-        }
-        defer os.Remove(tempFile.Name())
-        defer tempFile.Close()
+	if attempt.Status == "PENDING" {
+		if err := p.publications.MarkAttemptProcessing(ctx, attempt.ID); err != nil {
+			if err == storage.ErrAttemptNotClaimed {
+				return fmt.Errorf("attempt claim lost; retry reconciliation")
+			}
+			return fmt.Errorf("mark attempt processing: %w", err)
+		}
+	}
 
-        if _, err := io.Copy(tempFile, resp.Body); err != nil {
-            return fmt.Errorf("copy to temp file: %w", err)
-        }
-        
-        if _, err := tempFile.Seek(0, 0); err != nil {
-            return fmt.Errorf("seek temp file: %w", err)
-        }
+	input := model.PublishInput{
+		Caption:   caption,
+		MediaURL:  post.MediaURL,
+		MediaType: post.MediaType,
+	}
 
-        mediaID, uploadErr := connector.UploadMedia(ctx, accessToken, tempFile, mediaType)
-        if uploadErr != nil {
-            return fmt.Errorf("upload media to platform: %w", uploadErr)
-        }
-        mediaIDs = append(mediaIDs, mediaID)
-    }
+	var mediaIDs []string
+	if input.MediaURL != nil && *input.MediaURL != "" {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, *input.MediaURL, nil)
+		if reqErr != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("create download request: %w", reqErr)
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
-    publicURL, platformPostID, err := connector.Publish(ctx, accessToken, input.Caption, mediaIDs...)
-    if err != nil {
-        errMsg := err.Error()
-        if err := p.publications.MarkAttemptFailed(ctx, attempt.ID, "PUBLISH_FAILED", errMsg); err != nil {
-            log.Error().Err(err).Msg("Failed to mark attempt failed")
-        }
-        return fmt.Errorf("publish to platform: %w", err)
-    }
+		resp, respErr := http.DefaultClient.Do(req)
+		if respErr != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("download media: %w", respErr)
+		}
+		defer resp.Body.Close()
 
-    // Mark as succeeded
-    if err := p.publications.MarkAttemptSucceeded(ctx, attempt.ID, platformPostID, publicURL); err != nil {
-        return fmt.Errorf("mark attempt succeeded: %w", err)
-    }
+		if resp.StatusCode != http.StatusOK {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("download media failed: %d", resp.StatusCode)
+		}
 
-    // Mark target as published
-    if err := p.publications.MarkPostTargetPublished(ctx, target.ID); err != nil {
-        return fmt.Errorf("mark target published: %w", err)
-    }
+		mediaType := "application/octet-stream"
+		if input.MediaType != nil {
+			mediaType = *input.MediaType
+		}
 
-    return nil
+		tempFile, err := os.CreateTemp("", "upload-*.tmp")
+		if err != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("create temp file: %w", err)
+		}
+		defer os.Remove(tempFile.Name())
+		defer tempFile.Close()
+
+		if _, err := io.Copy(tempFile, resp.Body); err != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("copy to temp file: %w", err)
+		}
+
+		if _, err := tempFile.Seek(0, 0); err != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("seek temp file: %w", err)
+		}
+
+		mediaID, uploadErr := connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaType)
+		if uploadErr != nil {
+			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "UPLOAD_OUTCOME_UNKNOWN", uploadErr.Error())
+			return fmt.Errorf("upload media to platform: %w", uploadErr)
+		}
+		mediaIDs = append(mediaIDs, mediaID)
+	}
+
+	publicURL, platformPostID, err := connector.Publish(ctx, accessToken, attempt.ID.String(), input.Caption, mediaIDs...)
+	if err != nil {
+		_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "PUBLISH_OUTCOME_UNKNOWN", err.Error())
+		return fmt.Errorf("publish to platform: %w", err)
+	}
+
+	// Mark as succeeded
+	if err := p.publications.MarkAttemptSucceeded(ctx, attempt.ID, platformPostID, publicURL); err != nil {
+		return fmt.Errorf("mark attempt succeeded: %w", err)
+	}
+
+	// Mark target as published
+	if err := p.publications.MarkPostTargetPublished(ctx, target.ID); err != nil {
+		return fmt.Errorf("mark target published: %w", err)
+	}
+
+	return nil
 }
 
 func (p *PublishProcessor) updatePostStatus(ctx context.Context, postID uuid.UUID, status string) error {
