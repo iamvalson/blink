@@ -204,7 +204,6 @@ func (p *PublishProcessor) publishToTarget(
 				return fmt.Errorf("reset attempt after reconciliation: %w", err)
 			}
 			attempt.Status = "PENDING"
-			recoveryRequired = false
 		default:
 			return fmt.Errorf("unsupported reconciliation outcome: %q", reconciliation.Outcome)
 		}

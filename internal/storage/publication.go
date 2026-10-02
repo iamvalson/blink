@@ -137,7 +137,7 @@ func (r *PublicationRepository) MarkAttemptSucceeded(
 	if err != nil {
 		return fmt.Errorf("begin mark attempt succeeded: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	result, err := tx.Exec(
 		ctx,
