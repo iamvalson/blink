@@ -59,7 +59,7 @@ jobs:
         env:
           DATABASE_URL: postgres://blink:devpass@localhost:5432/blink_db
         run: |
-          for migration in migrations/*_up.sql; do
+          for migration in migrations/*.up.sql; do
             psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$migration"
           done
 
