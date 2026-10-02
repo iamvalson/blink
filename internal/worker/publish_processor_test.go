@@ -49,7 +49,7 @@ func (s *recoveryStore) GetPostTargetWithSocialAccount(context.Context, uuid.UUI
 }
 
 func (s *recoveryStore) MarkAttemptProcessing(context.Context, uuid.UUID) error {
-	if s.attempt.Status != "PENDING" && s.attempt.Status != "UNKNOWN" {
+	if s.attempt.Status != "PENDING" && s.attempt.Status != "UNKNOWN" && s.attempt.Status != "RETRYING" {
 		return errors.New("attempt is not claimable")
 	}
 	s.attempt.Status = "PROCESSING"
@@ -78,6 +78,15 @@ func (s *recoveryStore) MarkAttemptSucceeded(_ context.Context, _ uuid.UUID, pla
 
 func (s *recoveryStore) MarkAttemptFailed(context.Context, uuid.UUID, string, string) error {
 	s.attempt.Status = "FAILED"
+	return nil
+}
+
+func (s *recoveryStore) MarkAttemptRetrying(_ context.Context, _ uuid.UUID, code, class, message string, nextRetryAt time.Time) error {
+	s.attempt.Status = "RETRYING"
+	s.attempt.ErrorCode = &code
+	s.attempt.ErrorClass = &class
+	s.attempt.ErrorMessage = &message
+	s.attempt.NextRetryAt = &nextRetryAt
 	return nil
 }
 
@@ -241,7 +250,7 @@ func (s *crashFileStore) MarkAttemptProcessing(_ context.Context, _ uuid.UUID) e
 	if err != nil {
 		return err
 	}
-	if state.Status != "PENDING" && state.Status != "UNKNOWN" && state.Status != "FAILED" {
+	if state.Status != "PENDING" && state.Status != "UNKNOWN" && state.Status != "RETRYING" && state.Status != "FAILED" {
 		return errors.New("attempt is not claimable")
 	}
 	state.Status = "PROCESSING"
@@ -274,6 +283,10 @@ func (s *crashFileStore) MarkAttemptSucceeded(_ context.Context, _ uuid.UUID, po
 }
 
 func (s *crashFileStore) MarkAttemptFailed(context.Context, uuid.UUID, string, string) error {
+	return nil
+}
+
+func (s *crashFileStore) MarkAttemptRetrying(context.Context, uuid.UUID, string, string, string, time.Time) error {
 	return nil
 }
 

@@ -83,8 +83,9 @@ func (r *PublicationRepository) GetPublicationAttempt(ctx context.Context, postT
 	err := r.db.QueryRow(
 		ctx,
 		`
-            SELECT id, post_target_id, status, attempt_count, platform_post_id, platform_url,
-                   error_code, error_message, started_at, completed_at, created_at, updated_at
+			SELECT id, post_target_id, status, attempt_count, platform_post_id, platform_url,
+			       error_code, error_message, error_class, next_retry_at,
+			       started_at, completed_at, created_at, updated_at
             FROM publication_attempts
             WHERE post_target_id = $1
         `,
@@ -92,6 +93,7 @@ func (r *PublicationRepository) GetPublicationAttempt(ctx context.Context, postT
 	).Scan(
 		&attempt.ID, &attempt.PostTargetID, &attempt.Status, &attempt.AttemptCount,
 		&attempt.PlatformPostID, &attempt.PlatformURL, &attempt.ErrorCode, &attempt.ErrorMessage,
+		&attempt.ErrorClass, &attempt.NextRetryAt,
 		&attempt.StartedAt, &attempt.CompletedAt, &attempt.CreatedAt, &attempt.UpdatedAt,
 	)
 
@@ -110,7 +112,7 @@ func (r *PublicationRepository) MarkAttemptProcessing(ctx context.Context, attem
             UPDATE publication_attempts
             SET status = 'PROCESSING', started_at = COALESCE(started_at, NOW()),
                 attempt_count = attempt_count + 1, updated_at = NOW()
-            WHERE id = $1 AND status IN ('PENDING', 'UNKNOWN', 'FAILED')
+			WHERE id = $1 AND status IN ('PENDING', 'RETRYING', 'UNKNOWN', 'FAILED')
         `,
 		attemptID,
 	)
@@ -197,8 +199,8 @@ func (r *PublicationRepository) MarkAttemptFailed(
 		ctx,
 		`
             UPDATE publication_attempts
-            SET status = 'FAILED', error_code = $1, error_message = $2,
-                completed_at = $3, updated_at = $3, attempt_count = attempt_count + 1
+			SET status = 'FAILED', error_code = $1, error_message = $2,
+			    completed_at = $3, updated_at = $3, next_retry_at = NULL
             WHERE id = $4 AND status IN ('PROCESSING', 'UNKNOWN')
         `,
 		errorCode, errorMessage, now, attemptID,
@@ -211,6 +213,23 @@ func (r *PublicationRepository) MarkAttemptFailed(
 		return ErrAttemptStateConflict
 	}
 
+	return nil
+}
+
+// MarkAttemptRetrying persists a retry decision without consuming another delivery attempt.
+func (r *PublicationRepository) MarkAttemptRetrying(ctx context.Context, attemptID uuid.UUID, errorCode, errorClass, errorMessage string, nextRetryAt time.Time) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE publication_attempts
+		SET status = 'RETRYING', error_code = $1, error_class = $2, error_message = $3,
+		    next_retry_at = $4, completed_at = NULL, updated_at = NOW()
+		WHERE id = $5 AND status IN ('PROCESSING', 'PENDING')
+	`, errorCode, errorClass, errorMessage, nextRetryAt, attemptID)
+	if err != nil {
+		return fmt.Errorf("mark attempt retrying: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrAttemptStateConflict
+	}
 	return nil
 }
 
@@ -329,7 +348,7 @@ func (r *PublicationRepository) ResetAttemptForRetry(ctx context.Context, attemp
 		ctx,
 		`
             UPDATE publication_attempts
-            SET status = 'PENDING', updated_at = NOW()
+			SET status = 'PENDING', next_retry_at = NULL, updated_at = NOW()
             WHERE id = $1 AND status IN ('PROCESSING', 'UNKNOWN')
         `,
 		attemptID,
