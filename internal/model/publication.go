@@ -17,16 +17,36 @@ type PostTarget struct {
 type PublicationAttempt struct {
 	ID             uuid.UUID  `json:"id"`
 	PostTargetID   uuid.UUID  `json:"post_target_id"`
-	Status         string     `json:"status"` // PENDING, PROCESSING, UNKNOWN, SUCCEEDED, FAILED, CANCELLED
+	Status         string     `json:"status"` // PENDING, PROCESSING, RETRYING, UNKNOWN, SUCCEEDED, FAILED, CANCELLED
 	AttemptCount   int        `json:"attempt_count"`
 	PlatformPostID *string    `json:"platform_post_id,omitempty"`
 	PlatformURL    *string    `json:"platform_url,omitempty"`
 	ErrorCode      *string    `json:"error_code,omitempty"`
 	ErrorMessage   *string    `json:"error_message,omitempty"`
+	ErrorClass     *string    `json:"error_class,omitempty"`
+	NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type DeadLetterJob struct {
+	ID               uuid.UUID      `json:"id"`
+	PostID           uuid.UUID      `json:"post_id"`
+	PostTargetID     uuid.UUID      `json:"post_target_id"`
+	JobID            *string        `json:"job_id,omitempty"`
+	TaskType         string         `json:"task_type"`
+	Platform         string         `json:"platform"`
+	Attempts         int            `json:"attempts"`
+	MaxAttempts      int            `json:"max_attempts"`
+	FailureReason    string         `json:"failure_reason"`
+	FailureType      string         `json:"failure_type"`
+	PlatformResponse map[string]any `json:"platform_response,omitempty"`
+	FirstFailedAt    time.Time      `json:"first_failed_at"`
+	LastFailedAt     time.Time      `json:"last_failed_at"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 type OutboxEvent struct {
