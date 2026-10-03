@@ -11,6 +11,7 @@ import (
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/middleware"
 	"github.com/iamvalson/blink/internal/storage"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // NewRouter builds the HTTP router.
@@ -44,6 +45,7 @@ func NewRouter(
 
 	// Public routes
 	r.Get("/health", handler.HealthHandler)
+	r.Handle("/metrics", promhttp.Handler())
 
 	// Auth routes
 	signupHandler := handler.NewSignupHandler(signupService)
