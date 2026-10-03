@@ -188,8 +188,7 @@ func (p *PublishProcessor) publishToTarget(
 		return fmt.Errorf("get social account: %w", err)
 	}
 
-	accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
-	if err != nil {
+	if _, err = auth.DecryptToken(account.AccessToken, p.encryptionKey); err != nil {
 		if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
 			log.Error().Err(markErr).Msg("Failed to mark attempt failed")
 		}
