@@ -1,190 +1,291 @@
-[![GitHub Workflow Status (branch)](https://img.shields.io/github/actions/workflow/status/golang-migrate/migrate/ci.yaml?branch=master)](https://github.com/golang-migrate/migrate/actions/workflows/ci.yaml?query=branch%3Amaster)
-[![GoDoc](https://pkg.go.dev/badge/github.com/golang-migrate/migrate)](https://pkg.go.dev/github.com/golang-migrate/migrate/v4)
-[![Coverage Status](https://img.shields.io/coveralls/github/golang-migrate/migrate/master.svg)](https://coveralls.io/github/golang-migrate/migrate?branch=master)
-[![packagecloud.io](https://img.shields.io/badge/deb-packagecloud.io-844fec.svg)](https://packagecloud.io/golang-migrate/migrate?filter=debs)
-[![Docker Pulls](https://img.shields.io/docker/pulls/migrate/migrate.svg)](https://hub.docker.com/r/migrate/migrate/)
-![Supported Go Versions](https://img.shields.io/badge/Go-1.19%2C%201.20-lightgrey.svg)
-[![GitHub Release](https://img.shields.io/github/release/golang-migrate/migrate.svg)](https://github.com/golang-migrate/migrate/releases)
-[![Go Report Card](https://goreportcard.com/badge/github.com/golang-migrate/migrate/v4)](https://goreportcard.com/report/github.com/golang-migrate/migrate/v4)
+# Blink
 
-# migrate
+Blink is a Go service for reliable, asynchronous publishing to social
+platforms. The API persists publishing intent in PostgreSQL, places work in
+Redis/Asynq, and a separate worker performs publishing with retries,
+idempotency checks, rate-limit handling, OAuth refresh, and durable failure
+tracking.
 
-__Database migrations written in Go. Use as [CLI](#cli-usage) or import as [library](#use-in-your-go-project).__
+The repository also contains a Next.js web application in
+[`web/blink-web`](web/blink-web).
 
-* Migrate reads migrations from [sources](#migration-sources)
-   and applies them in correct order to a [database](#databases).
-* Drivers are "dumb", migrate glues everything together and makes sure the logic is bulletproof.
-   (Keeps the drivers lightweight, too.)
-* Database drivers don't assume things or try to correct user input. When in doubt, fail.
+## Architecture
 
-Forked from [mattes/migrate](https://github.com/mattes/migrate)
+```text
+Next.js web app
+       |
+       v
+Go API --> PostgreSQL
+  |           |
+  +--> Redis / Asynq <--- Go worker --> Twitter/X or YouTube
+```
 
-## Databases
+The API owns authentication, validation, persistence, idempotency, and
+enqueueing. The worker owns platform calls, OAuth refresh, retry decisions,
+rate-limit handling, and publication result persistence. PostgreSQL is the
+authoritative store for application and publication state; Redis is used for
+queueing and worker infrastructure.
 
-Database drivers run migrations. [Add a new database?](database/driver.go)
+## Current Features
 
-* [PostgreSQL](database/postgres)
-* [PGX v4](database/pgx)
-* [PGX v5](database/pgx/v5)
-* [Redshift](database/redshift)
-* [Ql](database/ql)
-* [Cassandra](database/cassandra)
-* [SQLite](database/sqlite)
-* [SQLite3](database/sqlite3) ([todo #165](https://github.com/mattes/migrate/issues/165))
-* [SQLCipher](database/sqlcipher)
-* [MySQL/ MariaDB](database/mysql)
-* [Neo4j](database/neo4j)
-* [MongoDB](database/mongodb)
-* [CrateDB](database/crate) ([todo #170](https://github.com/mattes/migrate/issues/170))
-* [Shell](database/shell) ([todo #171](https://github.com/mattes/migrate/issues/171))
-* [Google Cloud Spanner](database/spanner)
-* [CockroachDB](database/cockroachdb)
-* [YugabyteDB](database/yugabytedb)
-* [ClickHouse](database/clickhouse)
-* [Firebird](database/firebird)
-* [MS SQL Server](database/sqlserver)
+- JWT-based user authentication
+- Twitter/X and YouTube connector abstractions
+- OAuth account linking with encrypted token storage
+- PostgreSQL-backed posts, targets, attempts, outbox events, and failure history
+- Redis-backed Asynq publishing jobs
+- Bounded business retries with exponential backoff
+- Rate-limit-aware retry scheduling
+- Ambiguous-publication reconciliation
+- Database-backed dead-letter failure records
+- Structured Zerolog logging and Prometheus metrics
+- Graceful API and worker shutdown on `SIGINT` and `SIGTERM`
+- Mock Twitter/X publishing mode for local testing
 
-### Database URLs
+## Repository Layout
 
-Database connection strings are specified via URLs. The URL format is driver dependent but generally has the form: `dbdriver://username:password@host:port/dbname?param1=true&param2=false`
+```text
+cmd/
+  api/main.go                 API process
+  worker/main.go              Asynq worker process
+internal/
+  api/                        Chi router and HTTP handlers
+  auth/                       JWT, password, and token encryption
+  config/                     Environment-backed configuration
+  connectors/                 Platform connector interfaces and implementations
+  jobs/                       Asynq client and job payloads
+  metrics/                    Prometheus metrics
+  outbox/                     Database outbox dispatcher
+  storage/                    PostgreSQL repositories
+  worker/                     Publish processor and retry logic
+migrations/                   PostgreSQL schema migrations
+docs/                         Reliability and operational notes
+infra/docker-compose.yml      Local PostgreSQL and Redis
+web/blink-web/                Next.js frontend
+tests/                        Integration tests
+```
 
-Any [reserved URL characters](https://en.wikipedia.org/wiki/Percent-encoding#Percent-encoding_reserved_characters) need to be escaped. Note, the `%` character also [needs to be escaped](https://en.wikipedia.org/wiki/Percent-encoding#Percent-encoding_the_percent_character)
+## Prerequisites
 
-Explicitly, the following characters need to be escaped:
-`!`, `#`, `$`, `%`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `/`, `:`, `;`, `=`, `?`, `@`, `[`, `]`
+- Go 1.26 or newer
+- Docker and Docker Compose
+- PostgreSQL client tools (`psql`) for migrations
+- Node.js and pnpm for the frontend
 
-It's easiest to always run the URL parts of your DB connection URL (e.g. username, password, etc) through an URL encoder. See the example Python snippets below:
+## Configuration
+
+The Go processes load `.env` when it is present. The Makefile also includes
+and exports `.env`, so create that file before using `make` targets.
+
+The main settings are:
+
+| Variable                | Default                                            | Used by                                              |
+| ----------------------- | -------------------------------------------------- | ---------------------------------------------------- |
+| `DATABASE_URL`          | `postgres://blink:devpass@localhost:5432/blink_db` | API and worker                                       |
+| `REDIS_URL`             | `redis://localhost:6379`                           | API and worker                                       |
+| `PORT`                  | `8000`                                             | API                                                  |
+| `ENV`                   | `development`                                      | API logging                                          |
+| `LOG_LEVEL`             | `info`                                             | API logging                                          |
+| `SHUTDOWN_TIMEOUT`      | `30s`                                              | API and worker                                       |
+| `ENCRYPTION_KEY`        | empty                                              | API token encryption and worker publishing           |
+| `PLATFORM_MODE`         | `real`                                             | Worker; set to `mock` for local Twitter/X publishing |
+| `TWITTER_CLIENT_ID`     | empty                                              | API and worker                                       |
+| `TWITTER_CLIENT_SECRET` | empty                                              | API and worker                                       |
+| `TWITTER_CALLBACK_URL`  | empty                                              | API and worker                                       |
+| `YOUTUBE_CLIENT_ID`     | empty                                              | API and worker                                       |
+| `YOUTUBE_CLIENT_SECRET` | empty                                              | API and worker                                       |
+| `YOUTUBE_CALLBACK_URL`  | empty                                              | API and worker                                       |
+
+`SHUTDOWN_TIMEOUT` accepts Go duration syntax such as `5s` or `1m`. Invalid
+and non-positive values fall back to 30 seconds. Never commit real secrets.
+
+Example local `.env`:
+
+```dotenv
+DATABASE_URL=postgres://blink:devpass@localhost:5432/blink_db
+REDIS_URL=redis://localhost:6379
+ENCRYPTION_KEY=replace-with-a-local-key
+PLATFORM_MODE=mock
+SHUTDOWN_TIMEOUT=30s
+```
+
+## Local Setup
+
+Start PostgreSQL and Redis:
 
 ```bash
-$ python3 -c 'import urllib.parse; print(urllib.parse.quote(input("String to encode: "), ""))'
-String to encode: FAKEpassword!#$%&'()*+,/:;=?@[]
-FAKEpassword%21%23%24%25%26%27%28%29%2A%2B%2C%2F%3A%3B%3D%3F%40%5B%5D
-$ python2 -c 'import urllib; print urllib.quote(raw_input("String to encode: "), "")'
-String to encode: FAKEpassword!#$%&'()*+,/:;=?@[]
-FAKEpassword%21%23%24%25%26%27%28%29%2A%2B%2C%2F%3A%3B%3D%3F%40%5B%5D
-$
+make up
 ```
 
-## Migration Sources
-
-Source drivers read migrations from local or remote sources. [Add a new source?](source/driver.go)
-
-* [Filesystem](source/file) - read from filesystem
-* [io/fs](source/iofs) - read from a Go [io/fs](https://pkg.go.dev/io/fs#FS)
-* [Go-Bindata](source/go_bindata) - read from embedded binary data ([jteeuwen/go-bindata](https://github.com/jteeuwen/go-bindata))
-* [pkger](source/pkger) - read from embedded binary data ([markbates/pkger](https://github.com/markbates/pkger))
-* [GitHub](source/github) - read from remote GitHub repositories
-* [GitHub Enterprise](source/github_ee) - read from remote GitHub Enterprise repositories
-* [Bitbucket](source/bitbucket) - read from remote Bitbucket repositories
-* [Gitlab](source/gitlab) - read from remote Gitlab repositories
-* [AWS S3](source/aws_s3) - read from Amazon Web Services S3
-* [Google Cloud Storage](source/google_cloud_storage) - read from Google Cloud Platform Storage
-
-## CLI usage
-
-* Simple wrapper around this library.
-* Handles ctrl+c (SIGINT) gracefully.
-* No config search paths, no config files, no magic ENV var injections.
-
-__[CLI Documentation](cmd/migrate)__
-
-### Basic usage
+Apply the schema migrations in order. The repository currently contains five
+numbered migration pairs:
 
 ```bash
-$ migrate -source file://path/to/migrations -database postgres://localhost:5432/database up 2
+for file in migrations/*.up.sql; do
+  psql -v ON_ERROR_STOP=1 "${DATABASE_URL}?sslmode=disable" -f "$file"
+done
 ```
 
-### Docker usage
+`make db-setup` starts the infrastructure and applies the initial migration.
+For a fresh checkout, use the loop above afterward to apply the remaining
+migrations as well.
+
+Run the API and worker in separate terminals:
 
 ```bash
-$ docker run -v {{ migration dir }}:/migrations --network host migrate/migrate
-    -path=/migrations/ -database postgres://localhost:5432/database up 2
+make run-api
+PLATFORM_MODE=mock make run-worker
 ```
 
-## Use in your Go project
+The API listens on `http://localhost:8000` by default. Press Ctrl+C or send
+`SIGTERM` to let active HTTP requests and worker jobs drain within the
+configured shutdown timeout. See [Graceful Shutdown](docs/graceful_shutdown.md)
+for the lifecycle and container guidance.
 
-* API is stable and frozen for this release (v3 & v4).
-* Uses [Go modules](https://golang.org/cmd/go/#hdr-Modules__module_versions__and_more) to manage dependencies.
-* To help prevent database corruptions, it supports graceful stops via `GracefulStop chan bool`.
-* Bring your own logger.
-* Uses `io.Reader` streams internally for low memory overhead.
-* Thread-safe and no goroutine leaks.
+## API Routes
 
-__[Go Documentation](https://pkg.go.dev/github.com/golang-migrate/migrate/v4)__
+Public routes:
 
-```go
-import (
-    "github.com/golang-migrate/migrate/v4"
-    _ "github.com/golang-migrate/migrate/v4/database/postgres"
-    _ "github.com/golang-migrate/migrate/v4/source/github"
-)
-
-func main() {
-    m, err := migrate.New(
-        "github://mattes:personal-access-token@mattes/migrate_test",
-        "postgres://localhost:5432/database?sslmode=enable")
-    m.Steps(2)
-}
+```text
+GET  /health
+GET  /metrics
+POST /auth/signup
+POST /auth/login
+POST /auth/logout
 ```
 
-Want to use an existing database client?
+OAuth routes are registered for each configured connector:
 
-```go
-import (
-    "database/sql"
-    _ "github.com/lib/pq"
-    "github.com/golang-migrate/migrate/v4"
-    "github.com/golang-migrate/migrate/v4/database/postgres"
-    _ "github.com/golang-migrate/migrate/v4/source/file"
-)
-
-func main() {
-    db, err := sql.Open("postgres", "postgres://localhost:5432/database?sslmode=enable")
-    driver, err := postgres.WithInstance(db, &postgres.Config{})
-    m, err := migrate.NewWithDatabaseInstance(
-        "file:///migrations",
-        "postgres", driver)
-    m.Up() // or m.Step(2) if you want to explicitly set the number of migrations to run
-}
+```text
+GET /auth/twitter
+GET /auth/twitter/callback
+GET /auth/youtube
+GET /auth/youtube/callback
 ```
 
-## Getting started
+Post routes require JWT authentication:
 
-Go to [getting started](GETTING_STARTED.md)
+```text
+POST /api/v1/posts
+GET  /api/v1/posts/{id}
+POST /api/posts
+GET  /api/posts/{id}
+```
 
-## Tutorials
+The `/api/posts` paths are retained as compatibility aliases for the versioned
+post routes.
 
-* [CockroachDB](database/cockroachdb/TUTORIAL.md)
-* [PostgreSQL](database/postgres/TUTORIAL.md)
+## Publishing and Reliability
 
-(more tutorials to come)
+Publishing follows this shape:
 
-## Migration files
+```text
+HTTP request
+    |
+    v
+Persist post, targets, attempts, and outbox event
+    |
+    v
+Outbox dispatcher -> Redis/Asynq
+    |
+    v
+Worker loads authoritative state from PostgreSQL
+    |
+    +--> refresh OAuth token when needed
+    +--> publish through a platform connector
+    +--> persist success, retry, reconciliation, or terminal failure
+```
 
-Each migration has an up and down migration. [Why?](FAQ.md#why-two-separate-files-up-and-down-for-a-migration)
+Transient failures such as network errors, platform `5xx` responses, and
+rate-limit responses are retryable. Platform-provided retry timing takes
+precedence over exponential backoff. Ambiguous external results are recorded
+as `UNKNOWN` and reconciled before another publish is attempted.
+
+The worker uses explicit database-backed business retries and sets Asynq's
+native retry count so the two retry systems do not multiply one another.
+Terminal failures are recorded in the database-backed dead-letter tables.
+See [`docs/retry.md`](docs/retry.md) and
+[`docs/oauth_refresh.md`](docs/oauth_refresh.md) for the detailed behavior.
+
+### Mock Publishing
+
+Set `PLATFORM_MODE=mock` to exercise the publishing pipeline without outbound
+Twitter/X requests:
 
 ```bash
-1481574547_create_users_table.up.sql
-1481574547_create_users_table.down.sql
+PLATFORM_MODE=mock go run cmd/worker/main.go
 ```
 
-[Best practices: How to write migrations.](MIGRATIONS.md)
+The mock connector still exercises queueing, repository updates, publication
+attempts, and post status transitions. See [`docs/mock_mode.md`](docs/mock_mode.md)
+for verification queries.
 
-## Versions
+## Graceful Shutdown
 
-Version | Supported? | Import | Notes
---------|------------|--------|------
-**master** | :white_check_mark: | `import "github.com/golang-migrate/migrate/v4"` | New features and bug fixes arrive here first |
-**v4** | :white_check_mark: | `import "github.com/golang-migrate/migrate/v4"` | Used for stable releases |
-**v3** | :x: | `import "github.com/golang-migrate/migrate"` (with package manager) or `import "gopkg.in/golang-migrate/migrate.v3"` (not recommended) | **DO NOT USE** - No longer supported |
+Both processes handle `SIGINT` and `SIGTERM` without calling `os.Exit` during
+normal cleanup.
 
-## Development and Contributing
+- The API stops accepting new HTTP work with `http.Server.Shutdown`, stops the
+  outbox dispatcher, closes its Asynq client, and then closes PostgreSQL.
+- The worker uses Asynq's official graceful shutdown with `SHUTDOWN_TIMEOUT`,
+  waits for the worker to stop, then closes its retry client and PostgreSQL.
+- If the deadline expires, unfinished jobs are not marked successful. Existing
+  Asynq recovery and Blink retry/reconciliation semantics remain responsible
+  for recovery.
+- Startup failures clean up resources that were initialized before the failure.
 
-Yes, please! [`Makefile`](Makefile) is your friend,
-read the [development guide](CONTRIBUTING.md).
+## Frontend
 
-Also have a look at the [FAQ](FAQ.md).
+The Next.js application lives in [`web/blink-web`](web/blink-web). Start it
+with:
 
----
+```bash
+cd web/blink-web
+pnpm install
+pnpm dev
+```
 
-Looking for alternatives? [https://awesome-go.com/#database](https://awesome-go.com/#database).
+The default development URL is `http://localhost:3000`.
+
+## Testing
+
+Run all Go tests:
+
+```bash
+go test ./...
+```
+
+Run static analysis for the main processes and lifecycle packages:
+
+```bash
+go vet ./cmd/api ./cmd/worker ./internal/config ./internal/worker
+```
+
+The test suite includes API and service tests, connector tests, retry and
+publishing processor tests, OAuth refresh coverage, metrics tests, and an
+integration publishing scenario. External platform calls are mocked in tests.
+
+## Useful Commands
+
+```bash
+make up             # Start PostgreSQL and Redis
+make down           # Stop local infrastructure
+make logs           # Follow infrastructure logs
+make ps             # Show infrastructure status
+make run-api        # Start the API
+make run-worker     # Start the worker
+make db-setup       # Start infrastructure and apply initial schema
+make db-reset       # Delete local volumes and recreate the database
+```
+
+## Roadmap
+
+The current focus is Phase 3 reliability engineering: idempotency, bounded
+retries, dead-letter handling, OAuth refresh, rate-limit awareness,
+observability, and graceful shutdown. Future work may include scheduling,
+additional platforms, media processing, analytics, distributed rate limiting,
+tracing, and operator tooling for replaying failures.
+
+## License
+
+Blink is under active development. See [`LICENSE`](LICENSE) for the current
+license information.
