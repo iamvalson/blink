@@ -18,6 +18,7 @@ import (
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/jobs"
+	logger "github.com/iamvalson/blink/internal/log"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/rs/zerolog/log"
@@ -57,6 +58,13 @@ type oauthTokenStore interface {
 
 var oauthRefreshLocks sync.Map
 
+func getTaskID(ctx context.Context) string {
+	if id, ok := asynq.GetTaskID(ctx); ok {
+		return id
+	}
+	return ""
+}
+
 func NewPublishProcessor(
 	posts *storage.PostRepository,
 	publicationsRepo publicationStore,
@@ -84,22 +92,23 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 		return fmt.Errorf("parse publish job: %w", err)
 	}
 
-	log.Info().
-		Str("post_id", job.PostID.String()).
-		Msg("Processing publish job")
+	jobID := ""
+	if id, ok := asynq.GetTaskID(ctx); ok {
+		jobID = id
+	}
+	contextLogger := logger.WithJobContext(jobID, job.PostID.String(), "", "", 0)
+	contextLogger.Info().Str("event", "publish_job_started").Str("status", "started").Msg("publish job started")
 
 	// Load post
 	post, err := p.publications.GetPostForPublishing(ctx, job.PostID)
 	if err != nil {
 		return fmt.Errorf("get post: %w", err)
 	}
+	contextLogger = logger.WithJobContext(jobID, post.ID.String(), post.UserID.String(), "", 0)
 
 	// Check if post is already published
 	if post.Status != "QUEUED" {
-		log.Info().
-			Str("post_id", job.PostID.String()).
-			Str("status", post.Status).
-			Msg("Post not in QUEUED status, skipping")
+		contextLogger.Info().Str("event", "publish_job_skipped").Str("status", post.Status).Msg("post not in QUEUED status, skipping")
 		return nil
 	}
 
@@ -110,9 +119,7 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 	}
 
 	if len(targets) == 0 {
-		log.Warn().
-			Str("post_id", job.PostID.String()).
-			Msg("No pending targets found")
+		contextLogger.Warn().Str("event", "publish_job_no_targets").Str("status", "no_targets").Msg("no pending targets found")
 		return nil
 	}
 
@@ -121,11 +128,8 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 
 	for _, target := range targets {
 		if err := p.publishToTarget(ctx, post, &target); err != nil {
-			log.Error().
-				Err(err).
-				Str("post_id", job.PostID.String()).
-				Str("target_id", target.ID.String()).
-				Msg("Failed to publish to target")
+			logError := contextLogger.With().Str("target_id", target.ID.String()).Logger()
+			logError.Error().Err(logger.RedactError(err)).Str("event", "publish_failed").Str("status", "failed").Msg("failed to publish to target")
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -148,7 +152,7 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 	}
 
 	if err := p.updatePostStatus(ctx, job.PostID, "PUBLISHED"); err != nil {
-		log.Error().Err(err).Msg("Failed to update post status to PUBLISHED")
+		contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_post_status_failed").Str("status", "failed").Msg("failed to update post status to PUBLISHED")
 	}
 
 	return nil
@@ -187,10 +191,11 @@ func (p *PublishProcessor) publishToTarget(
 	if err != nil {
 		return fmt.Errorf("get social account: %w", err)
 	}
+	contextLogger := logger.WithJobContext(getTaskID(ctx), post.ID.String(), post.UserID.String(), account.Platform, attempt.AttemptCount)
 
 	if _, err = auth.DecryptToken(account.AccessToken, p.encryptionKey); err != nil {
 		if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
-			log.Error().Err(markErr).Msg("Failed to mark attempt failed")
+			contextLogger.Error().Err(logger.RedactError(markErr)).Str("event", "publish_failed").Str("status", "failed").Msg("failed to mark attempt failed")
 		}
 		return newPublishError(connectors.ErrorPermanent, connectors.ErrTokenDecryptFailed)
 	}
@@ -200,7 +205,7 @@ func (p *PublishProcessor) publishToTarget(
 	if !ok {
 		errMsg := fmt.Sprintf("no connector for platform: %s", account.Platform)
 		if err := p.publications.MarkAttemptFailed(ctx, attempt.ID, "UNKNOWN_PLATFORM", errMsg); err != nil {
-			log.Error().Err(err).Msg("Failed to mark attempt failed")
+			contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_failed").Str("status", "failed").Msg("failed to mark attempt failed")
 		}
 		return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
 	}
@@ -216,6 +221,8 @@ func (p *PublishProcessor) publishToTarget(
 	if post.Caption != nil {
 		caption = *post.Caption
 	}
+	start := time.Now()
+	contextLogger.Info().Str("event", "publish_started").Str("status", "started").Msg("publishing to platform")
 
 	if attempt.Status == "SUCCEEDED" {
 		return p.publications.MarkPostTargetPublished(ctx, target.ID)
@@ -354,6 +361,7 @@ func (p *PublishProcessor) publishToTarget(
 		} else if classification == connectors.ErrorPermanent {
 			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "PUBLISH_FAILED", err.Error())
 		}
+		contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_failed").Str("status", "failed").Dur("duration", time.Since(start)).Msg("publish failed")
 		return newPublishError(classification, fmt.Errorf("publish to platform: %w", err))
 	}
 
@@ -367,6 +375,7 @@ func (p *PublishProcessor) publishToTarget(
 		return fmt.Errorf("mark target published: %w", err)
 	}
 
+	contextLogger.Info().Str("event", "publish_succeeded").Str("status", "success").Dur("duration", time.Since(start)).Str("platform_post_id", platformPostID).Str("public_url", publicURL).Msg("publish succeeded")
 	return nil
 }
 
@@ -387,38 +396,50 @@ func (p *PublishProcessor) refreshAccessToken(ctx context.Context, account *mode
 	lock.Lock()
 	defer lock.Unlock()
 
+	refreshLogger := logger.WithJobContext("", "", account.UserID.String(), account.Platform, 0)
+	refreshLogger.Info().Str("event", "oauth_refresh_started").Str("status", "started").Msg("oauth refresh started")
+	start := time.Now()
+
 	refresher, ok := connector.(connectors.OAuthTokenRefresher)
 	if !ok || account.RefreshToken == nil || *account.RefreshToken == "" {
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(connectors.ErrInvalidRefreshToken)).Msg("oauth refresh failed")
 		return "", false, connectors.ErrInvalidRefreshToken
 	}
 	refreshToken, err := auth.DecryptToken(*account.RefreshToken, p.encryptionKey)
 	if err != nil {
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(err)).Msg("oauth refresh failed")
 		return "", false, connectors.ErrTokenDecryptFailed
 	}
 	result, err := refresher.RefreshToken(ctx, refreshToken)
 	if err != nil {
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(err)).Msg("oauth refresh failed")
 		return "", false, err
 	}
 	if result.AccessToken == "" {
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(connectors.ErrTokenRefreshFailed)).Msg("oauth refresh failed")
 		return "", false, connectors.ErrTokenRefreshFailed
 	}
 	encryptedAccessToken, err := auth.EncryptToken(result.AccessToken, p.encryptionKey)
 	if err != nil {
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(fmt.Errorf("%w: encrypt access token", connectors.ErrTokenPersistence))).Msg("oauth refresh failed")
 		return "", false, fmt.Errorf("%w: encrypt access token", connectors.ErrTokenPersistence)
 	}
 	var encryptedRefreshToken *string
 	if result.RefreshToken != nil {
 		encrypted, encryptErr := auth.EncryptToken(*result.RefreshToken, p.encryptionKey)
 		if encryptErr != nil {
+			refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(fmt.Errorf("%w: encrypt refresh token", connectors.ErrTokenPersistence))).Msg("oauth refresh failed")
 			return "", false, fmt.Errorf("%w: encrypt refresh token", connectors.ErrTokenPersistence)
 		}
 		encryptedRefreshToken = &encrypted
 	}
 	store, ok := p.publications.(oauthTokenStore)
 	if !ok {
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(connectors.ErrTokenPersistence)).Msg("oauth refresh failed")
 		return "", false, connectors.ErrTokenPersistence
 	}
 	if err := store.UpdateOAuthTokens(ctx, account.ID, encryptedAccessToken, result.ExpiresAt, encryptedRefreshToken); err != nil {
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(fmt.Errorf("%w: %v", connectors.ErrTokenPersistence, err))).Msg("oauth refresh failed")
 		return "", false, fmt.Errorf("%w: %v", connectors.ErrTokenPersistence, err)
 	}
 	account.AccessToken = encryptedAccessToken
@@ -428,6 +449,7 @@ func (p *PublishProcessor) refreshAccessToken(ctx context.Context, account *mode
 	if result.ExpiresAt != nil {
 		account.ExpiresAt = result.ExpiresAt
 	}
+	refreshLogger.Info().Str("event", "oauth_refresh_succeeded").Str("status", "success").Dur("duration", time.Since(start)).Msg("oauth refresh succeeded")
 	return result.AccessToken, true, nil
 }
 
@@ -442,6 +464,16 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 	if p.scheduler == nil {
 		return fmt.Errorf("retry scheduler is not configured")
 	}
+	var platform string
+	if target, account, getErr := p.publications.GetPostTargetWithSocialAccount(ctx, targetID); getErr == nil {
+		platform = account.Platform
+		_ = target
+	}
+	jobID := ""
+	if id, ok := asynq.GetTaskID(ctx); ok {
+		jobID = id
+	}
+	contextLogger := logger.WithJobContext(jobID, postID.String(), "", platform, attempt.AttemptCount)
 	delay := retryPolicy.ResolveRetryDelay(cause, attempt.AttemptCount)
 	nextRetryAt := time.Now().Add(delay)
 	if err := p.publications.MarkAttemptRetrying(ctx, attempt.ID, "PUBLISH_RETRY", string(publishClassification(cause)), cause.Error(), nextRetryAt); err != nil {
@@ -456,31 +488,23 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 	}
 	var rateLimitErr *connectors.RateLimitError
 	if errors.As(cause, &rateLimitErr) {
-		log.Info().
-			Str("event", "rate_limit").
-			Str("platform", rateLimitErr.Platform).
-			Int("status_code", rateLimitErr.StatusCode).
-			Str("publication_attempt_id", attempt.ID.String()).
-			Str("post_id", postID.String()).
-			Str("target_id", targetID.String()).
-			Int("attempt_count", attempt.AttemptCount).
-			Int("max_attempts", MaxAttempts).
+		contextLogger.Warn().
+			Str("event", "rate_limit_detected").
+			Str("status", "retrying").
+			Str("error", logger.RedactSecrets(rateLimitErr.Message)).
+			Int("http_status", rateLimitErr.StatusCode).
 			Dur("retry_after", rateLimitErr.RetryAfter).
 			Dur("retry_delay", delay).
-			Time("next_retry_at", nextRetryAt).
-			Msg("scheduling delayed rate-limit retry")
-	} else {
-		log.Info().
-			Str("publication_attempt_id", attempt.ID.String()).
-			Str("post_id", postID.String()).
-			Str("target_id", targetID.String()).
-			Int("attempt_count", attempt.AttemptCount).
-			Int("max_attempts", MaxAttempts).
-			Str("error_class", string(publishClassification(cause))).
-			Dur("retry_delay", delay).
-			Time("next_retry_at", nextRetryAt).
-			Msg("scheduling publish retry")
+			Time("retry_at", nextRetryAt).
+			Msg("rate limit detected, retry scheduled")
 	}
+	contextLogger.Info().
+		Str("event", "publish_retry_scheduled").
+		Str("status", "retrying").
+		Err(logger.RedactError(cause)).
+		Dur("retry_delay", delay).
+		Time("retry_at", nextRetryAt).
+		Msg("publish retry scheduled")
 	return nil
 }
 
@@ -494,11 +518,12 @@ func (p *PublishProcessor) recordPermanentFailure(ctx context.Context, postID, t
 	if id, ok := asynq.GetTaskID(ctx); ok && id != "" {
 		jobID = &id
 	}
+	contextLogger := logger.WithJobContext(getTaskID(ctx), postID.String(), "", account.Platform, attempt.AttemptCount)
 	if err := p.publications.RecordPermanentFailure(ctx, attempt.ID, postID, targetID, jobID, task.Type(), account.Platform, MaxAttempts, failureType, string(publishClassification(cause)), code, reason, response); err != nil {
-		log.Error().Err(err).Str("post_id", postID.String()).Str("target_id", targetID.String()).Int("attempt", attempt.AttemptCount).Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("failed to persist permanent publish failure")
+		contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_permanently_failed").Str("status", "permanent_failure").Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("failed to persist permanent publish failure")
 		return err
 	}
-	log.Error().Str("post_id", postID.String()).Str("target_id", targetID.String()).Int("attempt", attempt.AttemptCount).Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("publish job permanently failed")
+	contextLogger.Error().Err(logger.RedactError(cause)).Str("event", "publish_permanently_failed").Str("status", "permanent_failure").Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("publish job permanently failed")
 	return nil
 }
 
