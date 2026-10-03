@@ -443,7 +443,7 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 	if p.scheduler == nil {
 		return fmt.Errorf("retry scheduler is not configured")
 	}
-	delay := retryPolicy.NextRetryDelay(attempt.AttemptCount)
+	delay := retryPolicy.ResolveRetryDelay(cause, attempt.AttemptCount)
 	nextRetryAt := time.Now().Add(delay)
 	if err := p.publications.MarkAttemptRetrying(ctx, attempt.ID, "PUBLISH_RETRY", string(publishClassification(cause)), cause.Error(), nextRetryAt); err != nil {
 		return err
@@ -455,16 +455,33 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 	if _, err := p.scheduler.Enqueue(retryTask, asynq.ProcessIn(delay), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
 		return fmt.Errorf("enqueue publish retry: %w", err)
 	}
-	log.Info().
-		Str("publication_attempt_id", attempt.ID.String()).
-		Str("post_id", postID.String()).
-		Str("target_id", targetID.String()).
-		Int("attempt_count", attempt.AttemptCount).
-		Int("max_attempts", MaxAttempts).
-		Str("error_class", string(publishClassification(cause))).
-		Dur("retry_delay", delay).
-		Time("next_retry_at", nextRetryAt).
-		Msg("scheduling publish retry")
+	var rateLimitErr *connectors.RateLimitError
+	if errors.As(cause, &rateLimitErr) {
+		log.Info().
+			Str("event", "rate_limit").
+			Str("platform", rateLimitErr.Platform).
+			Int("status_code", rateLimitErr.StatusCode).
+			Str("publication_attempt_id", attempt.ID.String()).
+			Str("post_id", postID.String()).
+			Str("target_id", targetID.String()).
+			Int("attempt_count", attempt.AttemptCount).
+			Int("max_attempts", MaxAttempts).
+			Dur("retry_after", rateLimitErr.RetryAfter).
+			Dur("retry_delay", delay).
+			Time("next_retry_at", nextRetryAt).
+			Msg("scheduling delayed rate-limit retry")
+	} else {
+		log.Info().
+			Str("publication_attempt_id", attempt.ID.String()).
+			Str("post_id", postID.String()).
+			Str("target_id", targetID.String()).
+			Int("attempt_count", attempt.AttemptCount).
+			Int("max_attempts", MaxAttempts).
+			Str("error_class", string(publishClassification(cause))).
+			Dur("retry_delay", delay).
+			Time("next_retry_at", nextRetryAt).
+			Msg("scheduling publish retry")
+	}
 	return nil
 }
 
@@ -516,8 +533,25 @@ func failureDetails(cause error) (string, string, string, []byte) {
 	if statusCode != 0 {
 		metadata["status_code"] = statusCode
 	}
+	if rateLimitErr, ok := extractRateLimitError(cause); ok {
+		metadata["retry_after"] = rateLimitErr.RetryAfter.String()
+		if rateLimitErr.ResetAt != nil {
+			metadata["rate_limit_reset"] = rateLimitErr.ResetAt.UTC().Format(time.RFC3339)
+		}
+		if rateLimitErr.Platform != "" {
+			metadata["platform"] = rateLimitErr.Platform
+		}
+	}
 	response, _ := json.Marshal(metadata)
 	return failureType, code, reason, response
+}
+
+func extractRateLimitError(err error) (*connectors.RateLimitError, bool) {
+	var rateLimitErr *connectors.RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		return rateLimitErr, true
+	}
+	return nil, false
 }
 
 func redactSensitive(value string) string {

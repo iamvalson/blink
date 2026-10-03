@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/iamvalson/blink/internal/connectors"
 	"golang.org/x/oauth2"
@@ -122,9 +123,17 @@ func (c *Connector) Publish(ctx context.Context, token string, attemptID string,
 	}
 	defer resp.Body.Close()
 
-	// Check for rate limit
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", "", connectors.ErrRateLimited
+		body, _ := io.ReadAll(resp.Body)
+		policy := connectors.PlatformRateLimitPolicy{Platform: connectors.PlatformTwitter}
+		rateLimitErr := policy.Classify(resp.StatusCode, resp.Header)
+		if rateLimitErr != nil {
+			if text := strings.TrimSpace(string(body)); text != "" {
+				rateLimitErr.Message = fmt.Sprintf("%s: %s", rateLimitErr.Message, text)
+			}
+			return "", "", rateLimitErr
+		}
+		return "", "", connectors.NewRateLimitError(connectors.PlatformTwitter, resp.StatusCode, 0, nil, fmt.Sprintf("x api rate limit exceeded: %s", strings.TrimSpace(string(body))))
 	}
 
 	if resp.StatusCode != http.StatusCreated {

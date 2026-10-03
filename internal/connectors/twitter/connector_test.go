@@ -2,10 +2,12 @@ package twitter
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iamvalson/blink/internal/connectors"
 )
@@ -123,6 +125,7 @@ func TestPublishSuccessWithMockServer(t *testing.T) {
 
 func TestPublishRateLimitedWithMockServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "120")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
@@ -133,8 +136,44 @@ func TestPublishRateLimitedWithMockServer(t *testing.T) {
 	}
 
 	_, _, err := conn.Publish(context.Background(), "test_valid_token", "attempt-123", "Hello World")
-	if err != connectors.ErrRateLimited {
+	if !errors.Is(err, connectors.ErrRateLimited) {
 		t.Fatalf("expected ErrRateLimited, got %v", err)
+	}
+	var rateLimitErr *connectors.RateLimitError
+	if !errors.As(err, &rateLimitErr) {
+		t.Fatal("expected typed RateLimitError")
+	}
+	if rateLimitErr.RetryAfter != 120*time.Second {
+		t.Fatalf("retry after = %s, want 120s", rateLimitErr.RetryAfter)
+	}
+}
+
+func TestPublishRateLimitedThenSuccessWithMockServer(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"192837465","text":"Hello World"}}`))
+	}))
+	defer server.Close()
+
+	conn := &Connector{baseURL: server.URL, httpClient: server.Client()}
+	_, _, err := conn.Publish(context.Background(), "test_valid_token", "attempt-123", "Hello World")
+	if !errors.Is(err, connectors.ErrRateLimited) {
+		t.Fatalf("first request should return rate limit error, got %v", err)
+	}
+	_, _, err = conn.Publish(context.Background(), "test_valid_token", "attempt-456", "Hello World")
+	if err != nil {
+		t.Fatalf("second request should succeed after rate limit: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls, got %d", calls)
 	}
 }
 

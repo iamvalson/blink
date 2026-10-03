@@ -29,6 +29,13 @@ func ClassifyError(err error) ErrorClass {
 	if errors.As(err, &classified) {
 		return classified.Class
 	}
+	var rateLimitErr *RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		if rateLimitErr.Retryable {
+			return ErrorRetryable
+		}
+		return ErrorPermanent
+	}
 	if errors.Is(err, ErrRateLimited) {
 		return ErrorRetryable
 	}
@@ -48,8 +55,11 @@ func HTTPError(status int, message string) error {
 	if status == 401 || status == 403 {
 		return &ClassifiedError{Class: ErrorPermanent, Code: "AUTH_FAILED", StatusCode: status, Err: errors.Join(ErrAuthFailed, errors.New("platform rejected credentials"))}
 	}
+	if status == 429 {
+		return NewRateLimitError("unknown", status, 0, nil, message)
+	}
 	class := ErrorPermanent
-	if status == 429 || status >= 500 {
+	if status >= 500 {
 		class = ErrorRetryable
 	}
 	classified := &ClassifiedError{Class: class, Code: "HTTP_ERROR", StatusCode: status, Err: errors.New(message)}
