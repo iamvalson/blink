@@ -35,10 +35,19 @@ func ClassifyError(err error) ErrorClass {
 	if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrTokenExpired) || errors.Is(err, ErrAuthFailed) {
 		return ErrorPermanent
 	}
+	if errors.Is(err, ErrInvalidRefreshToken) {
+		return ErrorPermanent
+	}
+	if errors.Is(err, ErrTokenRefreshFailed) || errors.Is(err, ErrTokenPersistence) {
+		return ErrorRetryable
+	}
 	return ErrorAmbiguous
 }
 
 func HTTPError(status int, message string) error {
+	if status == 401 || status == 403 {
+		return &ClassifiedError{Class: ErrorPermanent, Code: "AUTH_FAILED", StatusCode: status, Err: errors.Join(ErrAuthFailed, errors.New("platform rejected credentials"))}
+	}
 	class := ErrorPermanent
 	if status == 429 || status >= 500 {
 		class = ErrorRetryable
