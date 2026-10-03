@@ -17,6 +17,37 @@ Ambiguous outcomes remain durable as `UNKNOWN` and go through the existing recon
 
 Retry state is persisted as `RETRYING` with `error_class` and `next_retry_at`. The same `publication_attempt_id` is used for every delivery. Asynq schedules the next execution with `ProcessIn`, while `MaxRetry(0)` prevents Asynq's native retry counter from multiplying Blink's business attempts. Workers do not sleep while waiting.
 
+## Rate-limit awareness
+
+Rate limiting is treated as a first-class transient failure, not as a generic generic retry. Each platform connector translates its own API semantics into a typed `RateLimitError` that captures the platform, HTTP status, retry metadata, and a retryable classification. The worker then chooses the effective delay using this precedence:
+
+1. explicit `Retry-After`
+2. platform reset timestamp when available
+3. Blink's exponential-backoff fallback
+4. one-hour cap
+
+This preserves server intent while keeping the business retry policy bounded. The `RateLimitError` is exposed via `errors.As`, so Blink can branch on platform-specific rate-limit data without fragile string matching.
+
+Twitter/X and YouTube each parse their own responses differently. For Twitter, a `429 Too Many Requests` response is normalized using the `Retry-After` and `x-rate-limit-reset` headers. For YouTube, quota/rate-limit conditions are recognized from `429` and quota-related `403` responses before they are treated as retryable. Other 4xx errors remain permanent unless they are a real quota/rate-limit condition.
+
+When a rate-limited publish is scheduled, Blink records the failure metadata in the attempt history and schedules the next Asynq delivery with `ProcessIn(delay)` rather than blocking the worker. This keeps the worker pool responsive while respecting the platform's `Retry-After`/reset guidance.
+
+```mermaid
+flowchart TD
+    A[Publish Job] --> B[Platform API]
+    B --> C{429 or quota/rate limit?}
+    C -->|No| D[Normal error handling]
+    C -->|Yes| E[Normalize to RateLimitError]
+    E --> F{Retry-After or reset timestamp?}
+    F -->|Yes| G[Use platform delay]
+    F -->|No| H[Use exponential backoff]
+    G --> I[Cap at 1 hour]
+    H --> I
+    I --> J[Schedule delayed Asynq retry]
+    J --> K[Worker continues processing other jobs]
+    K --> L[Retry publish]
+```
+
 ## Permanent failures and the database-backed DLQ
 
 When a permanent connector error occurs, or a retryable error occurs on attempt

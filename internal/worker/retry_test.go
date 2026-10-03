@@ -62,3 +62,20 @@ func TestFailureDetailsPreservePlatformMetadataWithoutSecrets(t *testing.T) {
 		t.Fatalf("platform response did not preserve safe metadata: %s", response)
 	}
 }
+
+func TestRetryPolicyUsesRateLimitRetryAfterBeforeBackoff(t *testing.T) {
+	policy := RetryPolicy{}
+	err := connectors.NewRateLimitError(connectors.PlatformTwitter, 429, 120*time.Second, nil, "rate limited")
+	if got := policy.ResolveRetryDelay(err, 1); got != 120*time.Second {
+		t.Fatalf("ResolveRetryDelay = %s, want %s", got, 120*time.Second)
+	}
+}
+
+func TestRetryPolicyCapsRateLimitDelayAtOneHour(t *testing.T) {
+	policy := RetryPolicy{}
+	resetAt := time.Now().Add(2 * time.Hour)
+	err := connectors.NewRateLimitError(connectors.PlatformYoutube, 429, 0, &resetAt, "quota exceeded")
+	if got := policy.ResolveRetryDelay(err, 1); got > MaxRetryDelay {
+		t.Fatalf("ResolveRetryDelay = %s exceeds %s", got, MaxRetryDelay)
+	}
+}

@@ -28,12 +28,12 @@ func NewSocialAccountRepository(db *pgxpool.Pool) *SocialAccountRepository {
 
 func (r *SocialAccountRepository) Upsert(
 	ctx context.Context,
-	userID        string,
-	platform      string, // plain string — no import of this package needed by callers
+	userID string,
+	platform string, // plain string — no import of this package needed by callers
 	platformUserID string,
-	accessToken   string,
-	refreshToken  string,
-	expiresAt     time.Time,
+	accessToken string,
+	refreshToken string,
+	expiresAt time.Time,
 ) error {
 	const query = `
 		INSERT INTO social_accounts (
@@ -50,7 +50,8 @@ func (r *SocialAccountRepository) Upsert(
 			platform_user_id = EXCLUDED.platform_user_id,
 			access_token = EXCLUDED.access_token,
 			refresh_token = COALESCE(EXCLUDED.refresh_token, social_accounts.refresh_token),
-			expires_at = EXCLUDED.expires_at
+			expires_at = EXCLUDED.expires_at,
+			updated_at = NOW()
 	`
 	_, err := r.db.Exec(ctx, query, userID, platform, platformUserID, accessToken, refreshToken, expiresAt)
 

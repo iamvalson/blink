@@ -105,6 +105,15 @@ func (s *recoveryStore) RecordPermanentFailure(_ context.Context, _ uuid.UUID, _
 	return nil
 }
 
+func (s *recoveryStore) UpdateOAuthTokens(_ context.Context, _ uuid.UUID, accessToken string, expiresAt *time.Time, refreshToken *string) error {
+	s.account.AccessToken = accessToken
+	s.account.ExpiresAt = expiresAt
+	if refreshToken != nil {
+		s.account.RefreshToken = refreshToken
+	}
+	return nil
+}
+
 type crashRecoveryConnector struct {
 	publishCalls   int
 	reconcileCalls int

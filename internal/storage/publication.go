@@ -415,6 +415,33 @@ func (r *PublicationRepository) GetPostTargetWithSocialAccount(
 	return &target, &account, nil
 }
 
+// UpdateOAuthTokens atomically persists the complete refreshed credential
+// state. A nil refresh token deliberately preserves the existing ciphertext.
+func (r *PublicationRepository) UpdateOAuthTokens(ctx context.Context, accountID uuid.UUID, accessToken string, expiresAt *time.Time, refreshToken *string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin oauth token update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, err = tx.Exec(ctx, `
+		UPDATE social_accounts
+		SET access_token = $1,
+		    expires_at = COALESCE($2, expires_at),
+		    refresh_token = COALESCE($3, refresh_token),
+		    updated_at = NOW()
+		WHERE id = $4
+	`, accessToken, expiresAt, refreshToken, accountID)
+	if err != nil {
+		return fmt.Errorf("update oauth tokens: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit oauth token update: %w", err)
+	}
+	return nil
+}
+
 // UpdatePostStatus updates a post's overall publishing status
 func (r *PublicationRepository) UpdatePostStatus(ctx context.Context, postID uuid.UUID, status string) error {
 	_, err := r.db.Exec(

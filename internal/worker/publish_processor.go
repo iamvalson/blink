@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,6 +50,12 @@ type publicationStore interface {
 	UpdatePostStatus(context.Context, uuid.UUID, string) error
 	RecordPermanentFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *string, string, string, int, string, string, string, string, []byte) error
 }
+
+type oauthTokenStore interface {
+	UpdateOAuthTokens(context.Context, uuid.UUID, string, *time.Time, *string) error
+}
+
+var oauthRefreshLocks sync.Map
 
 func NewPublishProcessor(
 	posts *storage.PostRepository,
@@ -181,12 +188,11 @@ func (p *PublishProcessor) publishToTarget(
 		return fmt.Errorf("get social account: %w", err)
 	}
 
-	accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
-	if err != nil {
+	if _, err = auth.DecryptToken(account.AccessToken, p.encryptionKey); err != nil {
 		if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
 			log.Error().Err(markErr).Msg("Failed to mark attempt failed")
 		}
-		return newPublishError(connectors.ErrorPermanent, fmt.Errorf("decrypt access token: %w", err))
+		return newPublishError(connectors.ErrorPermanent, connectors.ErrTokenDecryptFailed)
 	}
 
 	// Get connector for platform
@@ -197,6 +203,12 @@ func (p *PublishProcessor) publishToTarget(
 			log.Error().Err(err).Msg("Failed to mark attempt failed")
 		}
 		return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
+	}
+
+	accessToken, refreshed, err := p.ensureAccessToken(ctx, account, connector)
+	if err != nil {
+		_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", err.Error())
+		return newPublishError(connectors.ClassifyError(err), err)
 	}
 
 	// Publish
@@ -302,6 +314,18 @@ func (p *PublishProcessor) publishToTarget(
 		}
 
 		mediaID, uploadErr := connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaType)
+		if errors.Is(uploadErr, connectors.ErrAuthFailed) && !refreshed {
+			if _, seekErr := tempFile.Seek(0, 0); seekErr != nil {
+				return newPublishError(connectors.ErrorPermanent, fmt.Errorf("rewind media for auth retry: %w", seekErr))
+			}
+			var refreshErr error
+			accessToken, refreshed, refreshErr = p.refreshAccessToken(ctx, account, connector)
+			if refreshErr != nil {
+				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", refreshErr.Error())
+				return newPublishError(connectors.ClassifyError(refreshErr), refreshErr)
+			}
+			mediaID, uploadErr = connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaType)
+		}
 		if uploadErr != nil {
 			classification := publishClassification(uploadErr)
 			if classification == connectors.ErrorAmbiguous {
@@ -315,6 +339,14 @@ func (p *PublishProcessor) publishToTarget(
 	}
 
 	publicURL, platformPostID, err := connector.Publish(ctx, accessToken, attempt.ID.String(), input.Caption, mediaIDs...)
+	if errors.Is(err, connectors.ErrAuthFailed) && !refreshed {
+		accessToken, _, refreshErr := p.refreshAccessToken(ctx, account, connector)
+		if refreshErr != nil {
+			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", refreshErr.Error())
+			return newPublishError(connectors.ClassifyError(refreshErr), refreshErr)
+		}
+		publicURL, platformPostID, err = connector.Publish(ctx, accessToken, attempt.ID.String(), input.Caption, mediaIDs...)
+	}
 	if err != nil {
 		classification := publishClassification(err)
 		if classification == connectors.ErrorAmbiguous {
@@ -338,6 +370,67 @@ func (p *PublishProcessor) publishToTarget(
 	return nil
 }
 
+func (p *PublishProcessor) ensureAccessToken(ctx context.Context, account *model.SocialAccount, connector connectors.PlatformConnector) (string, bool, error) {
+	accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
+	if err != nil {
+		return "", false, connectors.ErrTokenDecryptFailed
+	}
+	if !connectors.TokenNeedsRefresh(account.ExpiresAt, time.Now(), connectors.DefaultRefreshSkew) {
+		return accessToken, false, nil
+	}
+	return p.refreshAccessToken(ctx, account, connector)
+}
+
+func (p *PublishProcessor) refreshAccessToken(ctx context.Context, account *model.SocialAccount, connector connectors.PlatformConnector) (string, bool, error) {
+	lockValue, _ := oauthRefreshLocks.LoadOrStore(account.ID, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
+	refresher, ok := connector.(connectors.OAuthTokenRefresher)
+	if !ok || account.RefreshToken == nil || *account.RefreshToken == "" {
+		return "", false, connectors.ErrInvalidRefreshToken
+	}
+	refreshToken, err := auth.DecryptToken(*account.RefreshToken, p.encryptionKey)
+	if err != nil {
+		return "", false, connectors.ErrTokenDecryptFailed
+	}
+	result, err := refresher.RefreshToken(ctx, refreshToken)
+	if err != nil {
+		return "", false, err
+	}
+	if result.AccessToken == "" {
+		return "", false, connectors.ErrTokenRefreshFailed
+	}
+	encryptedAccessToken, err := auth.EncryptToken(result.AccessToken, p.encryptionKey)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: encrypt access token", connectors.ErrTokenPersistence)
+	}
+	var encryptedRefreshToken *string
+	if result.RefreshToken != nil {
+		encrypted, encryptErr := auth.EncryptToken(*result.RefreshToken, p.encryptionKey)
+		if encryptErr != nil {
+			return "", false, fmt.Errorf("%w: encrypt refresh token", connectors.ErrTokenPersistence)
+		}
+		encryptedRefreshToken = &encrypted
+	}
+	store, ok := p.publications.(oauthTokenStore)
+	if !ok {
+		return "", false, connectors.ErrTokenPersistence
+	}
+	if err := store.UpdateOAuthTokens(ctx, account.ID, encryptedAccessToken, result.ExpiresAt, encryptedRefreshToken); err != nil {
+		return "", false, fmt.Errorf("%w: %v", connectors.ErrTokenPersistence, err)
+	}
+	account.AccessToken = encryptedAccessToken
+	if encryptedRefreshToken != nil {
+		account.RefreshToken = encryptedRefreshToken
+	}
+	if result.ExpiresAt != nil {
+		account.ExpiresAt = result.ExpiresAt
+	}
+	return result.AccessToken, true, nil
+}
+
 func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, cause error) error {
 	attempt, err := p.publications.GetPublicationAttempt(ctx, targetID)
 	if err != nil {
@@ -349,7 +442,7 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 	if p.scheduler == nil {
 		return fmt.Errorf("retry scheduler is not configured")
 	}
-	delay := retryPolicy.NextRetryDelay(attempt.AttemptCount)
+	delay := retryPolicy.ResolveRetryDelay(cause, attempt.AttemptCount)
 	nextRetryAt := time.Now().Add(delay)
 	if err := p.publications.MarkAttemptRetrying(ctx, attempt.ID, "PUBLISH_RETRY", string(publishClassification(cause)), cause.Error(), nextRetryAt); err != nil {
 		return err
@@ -361,16 +454,33 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 	if _, err := p.scheduler.Enqueue(retryTask, asynq.ProcessIn(delay), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
 		return fmt.Errorf("enqueue publish retry: %w", err)
 	}
-	log.Info().
-		Str("publication_attempt_id", attempt.ID.String()).
-		Str("post_id", postID.String()).
-		Str("target_id", targetID.String()).
-		Int("attempt_count", attempt.AttemptCount).
-		Int("max_attempts", MaxAttempts).
-		Str("error_class", string(publishClassification(cause))).
-		Dur("retry_delay", delay).
-		Time("next_retry_at", nextRetryAt).
-		Msg("scheduling publish retry")
+	var rateLimitErr *connectors.RateLimitError
+	if errors.As(cause, &rateLimitErr) {
+		log.Info().
+			Str("event", "rate_limit").
+			Str("platform", rateLimitErr.Platform).
+			Int("status_code", rateLimitErr.StatusCode).
+			Str("publication_attempt_id", attempt.ID.String()).
+			Str("post_id", postID.String()).
+			Str("target_id", targetID.String()).
+			Int("attempt_count", attempt.AttemptCount).
+			Int("max_attempts", MaxAttempts).
+			Dur("retry_after", rateLimitErr.RetryAfter).
+			Dur("retry_delay", delay).
+			Time("next_retry_at", nextRetryAt).
+			Msg("scheduling delayed rate-limit retry")
+	} else {
+		log.Info().
+			Str("publication_attempt_id", attempt.ID.String()).
+			Str("post_id", postID.String()).
+			Str("target_id", targetID.String()).
+			Int("attempt_count", attempt.AttemptCount).
+			Int("max_attempts", MaxAttempts).
+			Str("error_class", string(publishClassification(cause))).
+			Dur("retry_delay", delay).
+			Time("next_retry_at", nextRetryAt).
+			Msg("scheduling publish retry")
+	}
 	return nil
 }
 
@@ -422,8 +532,25 @@ func failureDetails(cause error) (string, string, string, []byte) {
 	if statusCode != 0 {
 		metadata["status_code"] = statusCode
 	}
+	if rateLimitErr, ok := extractRateLimitError(cause); ok {
+		metadata["retry_after"] = rateLimitErr.RetryAfter.String()
+		if rateLimitErr.ResetAt != nil {
+			metadata["rate_limit_reset"] = rateLimitErr.ResetAt.UTC().Format(time.RFC3339)
+		}
+		if rateLimitErr.Platform != "" {
+			metadata["platform"] = rateLimitErr.Platform
+		}
+	}
 	response, _ := json.Marshal(metadata)
 	return failureType, code, reason, response
+}
+
+func extractRateLimitError(err error) (*connectors.RateLimitError, bool) {
+	var rateLimitErr *connectors.RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		return rateLimitErr, true
+	}
+	return nil, false
 }
 
 func redactSensitive(value string) string {

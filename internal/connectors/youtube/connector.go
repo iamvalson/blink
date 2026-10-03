@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/iamvalson/blink/internal/connectors"
 	"golang.org/x/oauth2"
@@ -240,6 +241,9 @@ func (c *Connector) Publish(
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		if rateLimitErr := youtubeRateLimitError(resp.StatusCode, resp.Header, respBody); rateLimitErr != nil {
+			return "", "", rateLimitErr
+		}
 		return "", "", connectors.HTTPError(resp.StatusCode, fmt.Sprintf("update metadata failed: %s", string(respBody)))
 	}
 
@@ -253,6 +257,74 @@ func (c *Connector) Publish(
 
 // GetStatus polls the platform for post/media status.
 // Used for platforms with asynchronous publishing or processing.
+func youtubeRateLimitError(statusCode int, headers http.Header, body []byte) *connectors.RateLimitError {
+	if statusCode == http.StatusTooManyRequests {
+		retryAfter := connectors.ParseRetryAfterHeader(headers.Get("Retry-After"))
+		resetAt := connectors.ParseRateLimitResetHeader(headers.Get("X-RateLimit-Reset"))
+		if retryAfter == 0 && resetAt != nil {
+			retryAfter = time.Until(*resetAt)
+			if retryAfter < 0 {
+				retryAfter = 0
+			}
+		}
+		err := connectors.NewRateLimitError(connectors.PlatformYoutube, statusCode, retryAfter, resetAt, "YouTube API rate limit exceeded")
+		if rateLimitErr, ok := err.(*connectors.RateLimitError); ok {
+			return rateLimitErr
+		}
+		return nil
+	}
+	if statusCode != http.StatusForbidden {
+		return nil
+	}
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Errors  []struct {
+				Reason string `json:"reason"`
+			} `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	if payload.Error.Message == "" && len(payload.Error.Errors) == 0 {
+		return nil
+	}
+	for _, errInfo := range payload.Error.Errors {
+		reason := strings.ToLower(errInfo.Reason)
+		if reason == "quotaexceeded" || reason == "ratelimitexceeded" || reason == "userratelimitexceeded" || reason == "dailylimitexceeded" || strings.Contains(reason, "quota") || strings.Contains(reason, "rate") {
+			retryAfter := connectors.ParseRetryAfterHeader(headers.Get("Retry-After"))
+			resetAt := connectors.ParseRateLimitResetHeader(headers.Get("X-RateLimit-Reset"))
+			if retryAfter == 0 && resetAt != nil {
+				retryAfter = time.Until(*resetAt)
+				if retryAfter < 0 {
+					retryAfter = 0
+				}
+			}
+			err := connectors.NewRateLimitError(connectors.PlatformYoutube, statusCode, retryAfter, resetAt, payload.Error.Message)
+			if rateLimitErr, ok := err.(*connectors.RateLimitError); ok {
+				return rateLimitErr
+			}
+		}
+	}
+	message := strings.ToLower(payload.Error.Message)
+	if strings.Contains(message, "quota") || strings.Contains(message, "rate limit") || strings.Contains(message, "daily limit") {
+		retryAfter := connectors.ParseRetryAfterHeader(headers.Get("Retry-After"))
+		resetAt := connectors.ParseRateLimitResetHeader(headers.Get("X-RateLimit-Reset"))
+		if retryAfter == 0 && resetAt != nil {
+			retryAfter = time.Until(*resetAt)
+			if retryAfter < 0 {
+				retryAfter = 0
+			}
+		}
+		err := connectors.NewRateLimitError(connectors.PlatformYoutube, statusCode, retryAfter, resetAt, payload.Error.Message)
+		if rateLimitErr, ok := err.(*connectors.RateLimitError); ok {
+			return rateLimitErr
+		}
+	}
+	return nil
+}
+
 func (c *Connector) GetStatus(
 	ctx context.Context,
 	platformPostID string,

@@ -18,6 +18,23 @@ func (RetryPolicy) ShouldRetry(err error, attemptCount int) bool {
 	return attemptCount < MaxAttempts && connectors.ClassifyError(err) == connectors.ErrorRetryable
 }
 
+func (RetryPolicy) ResolveRetryDelay(err error, attemptCount int) time.Duration {
+	var rateLimitErr *connectors.RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		if rateLimitErr.RetryAfter > 0 {
+			return minRetryDelay(rateLimitErr.RetryAfter)
+		}
+		if rateLimitErr.ResetAt != nil {
+			delay := time.Until(*rateLimitErr.ResetAt)
+			if delay < 0 {
+				delay = 0
+			}
+			return minRetryDelay(delay)
+		}
+	}
+	return minRetryDelay(RetryPolicy{}.NextRetryDelay(attemptCount))
+}
+
 func (RetryPolicy) NextRetryDelay(attemptCount int) time.Duration {
 	var delay time.Duration
 	switch attemptCount {
@@ -26,7 +43,14 @@ func (RetryPolicy) NextRetryDelay(attemptCount int) time.Duration {
 	case 2:
 		delay = 5 * time.Minute
 	default:
-		delay = MaxRetryDelay
+		delay = 30 * time.Minute
+	}
+	return minRetryDelay(delay)
+}
+
+func minRetryDelay(delay time.Duration) time.Duration {
+	if delay < 0 {
+		return 0
 	}
 	if delay > MaxRetryDelay {
 		return MaxRetryDelay

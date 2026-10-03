@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
+	"github.com/iamvalson/blink/internal/connectors"
 	"golang.org/x/oauth2"
 )
 
@@ -42,6 +46,55 @@ func ExchangeCodeForToken(ctx context.Context, oauthConfig *oauth2.Config, code,
 		return nil, fmt.Errorf("Failed to exchange code: %w", err)
 	}
 	return token, nil
+}
+
+// RefreshToken uses X OAuth 2.0 offline access. The worker persists any
+// rotated refresh token; this method never handles ciphertext or storage.
+func (c *Connector) RefreshToken(ctx context.Context, refreshToken string) (connectors.TokenResult, error) {
+	values := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.oauthConfig.Endpoint.TokenURL, strings.NewReader(values.Encode()))
+	if err != nil {
+		return connectors.TokenResult{}, fmt.Errorf("%w: create X token request", connectors.ErrTokenRefreshFailed)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(c.oauthConfig.ClientID, c.oauthConfig.ClientSecret)
+	client := c.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return connectors.TokenResult{}, fmt.Errorf("%w: X token endpoint unavailable", connectors.ErrTokenRefreshFailed)
+	}
+	defer resp.Body.Close()
+	var payload struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+		Error        string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return connectors.TokenResult{}, fmt.Errorf("%w: malformed X token response", connectors.ErrTokenRefreshFailed)
+	}
+	if resp.StatusCode >= 400 {
+		if payload.Error == "invalid_grant" {
+			return connectors.TokenResult{}, connectors.ErrInvalidRefreshToken
+		}
+		return connectors.TokenResult{}, fmt.Errorf("%w: X token endpoint returned %d", connectors.ErrTokenRefreshFailed, resp.StatusCode)
+	}
+	if payload.AccessToken == "" {
+		return connectors.TokenResult{}, fmt.Errorf("%w: X returned no access token", connectors.ErrTokenRefreshFailed)
+	}
+
+	result := connectors.TokenResult{AccessToken: payload.AccessToken}
+	if payload.ExpiresIn > 0 {
+		expiresAt := time.Now().Add(time.Duration(payload.ExpiresIn) * time.Second)
+		result.ExpiresAt = &expiresAt
+	}
+	if payload.RefreshToken != "" {
+		result.RefreshToken = &payload.RefreshToken
+	}
+	return result, nil
 }
 
 // GetUserInfo fetches authenticated user's info
