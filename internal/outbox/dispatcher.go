@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/iamvalson/blink/internal/jobs"
+	"github.com/iamvalson/blink/internal/metrics"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/rs/zerolog/log"
@@ -69,6 +70,7 @@ func (d *Dispatcher) dispatchEvent(ctx context.Context, event *model.OutboxEvent
 	// Blink owns publication-attempt retries; Asynq only schedules executions.
 	_, err = d.jobsClient.Enqueue(task, asynq.MaxRetry(0), asynq.Timeout(5*60*1000*1000*1000)) // 5 minutes
 	if err != nil {
+		metrics.QueueFailure("enqueue")
 		// If enqueue fails, mark event as failed
 		if err := d.outboxRepo.MarkEventFailed(ctx, event.ID, err.Error()); err != nil {
 			log.Error().Err(err).Msg("Failed to mark event as failed")

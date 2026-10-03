@@ -19,6 +19,7 @@ import (
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/jobs"
 	logger "github.com/iamvalson/blink/internal/log"
+	"github.com/iamvalson/blink/internal/metrics"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/rs/zerolog/log"
@@ -127,9 +128,11 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 	var firstErr error
 
 	for _, target := range targets {
-		if err := p.publishToTarget(ctx, post, &target); err != nil {
+		platform, err := p.processTarget(ctx, post, &target)
+		if err != nil {
 			logError := contextLogger.With().Str("target_id", target.ID.String()).Logger()
 			logError.Error().Err(logger.RedactError(err)).Str("event", "publish_failed").Str("status", "failed").Msg("failed to publish to target")
+			metrics.JobFailed(platform)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -142,6 +145,8 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 					firstErr = scheduleErr
 				}
 			}
+		} else {
+			metrics.JobSucceeded(platform)
 		}
 	}
 
@@ -156,6 +161,17 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 	}
 
 	return nil
+}
+
+func (p *PublishProcessor) processTarget(ctx context.Context, post *model.Post, target *model.PostTarget) (string, error) {
+	platform := metrics.PlatformUnknown
+	if _, account, err := p.publications.GetPostTargetWithSocialAccount(ctx, target.ID); err == nil {
+		platform = metrics.NormalizePlatform(account.Platform)
+	}
+	metrics.JobProcessed(platform)
+	metrics.WorkerJobStarted()
+	defer metrics.WorkerJobFinished()
+	return platform, p.publishToTarget(ctx, post, target)
 }
 
 func (p *PublishProcessor) publishToTarget(
@@ -192,6 +208,7 @@ func (p *PublishProcessor) publishToTarget(
 		return fmt.Errorf("get social account: %w", err)
 	}
 	contextLogger := logger.WithJobContext(getTaskID(ctx), post.ID.String(), post.UserID.String(), account.Platform, attempt.AttemptCount)
+	platform := metrics.NormalizePlatform(account.Platform)
 
 	if _, err = auth.DecryptToken(account.AccessToken, p.encryptionKey); err != nil {
 		if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
@@ -334,6 +351,9 @@ func (p *PublishProcessor) publishToTarget(
 			mediaID, uploadErr = connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaType)
 		}
 		if uploadErr != nil {
+			if rateLimitErr, ok := extractRateLimitError(uploadErr); ok {
+				metrics.RateLimitEvent(rateLimitErr.Platform)
+			}
 			classification := publishClassification(uploadErr)
 			if classification == connectors.ErrorAmbiguous {
 				_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "UPLOAD_OUTCOME_UNKNOWN", uploadErr.Error())
@@ -345,17 +365,24 @@ func (p *PublishProcessor) publishToTarget(
 		mediaIDs = append(mediaIDs, mediaID)
 	}
 
+	publishStart := time.Now()
 	publicURL, platformPostID, err := connector.Publish(ctx, accessToken, attempt.ID.String(), input.Caption, mediaIDs...)
+	metrics.ObservePublishDuration(platform, time.Since(publishStart).Seconds())
 	if errors.Is(err, connectors.ErrAuthFailed) && !refreshed {
 		accessToken, _, refreshErr := p.refreshAccessToken(ctx, account, connector)
 		if refreshErr != nil {
 			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", refreshErr.Error())
 			return newPublishError(connectors.ClassifyError(refreshErr), refreshErr)
 		}
+		publishStart = time.Now()
 		publicURL, platformPostID, err = connector.Publish(ctx, accessToken, attempt.ID.String(), input.Caption, mediaIDs...)
+		metrics.ObservePublishDuration(platform, time.Since(publishStart).Seconds())
 	}
 	if err != nil {
 		classification := publishClassification(err)
+		if rateLimitErr, ok := extractRateLimitError(err); ok {
+			metrics.RateLimitEvent(rateLimitErr.Platform)
+		}
 		if classification == connectors.ErrorAmbiguous {
 			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "PUBLISH_OUTCOME_UNKNOWN", err.Error())
 		} else if classification == connectors.ErrorPermanent {
@@ -411,6 +438,10 @@ func (p *PublishProcessor) refreshAccessToken(ctx context.Context, account *mode
 		return "", false, connectors.ErrTokenDecryptFailed
 	}
 	result, err := refresher.RefreshToken(ctx, refreshToken)
+	refreshResult := "failure"
+	defer func() {
+		metrics.TokenRefresh(account.Platform, refreshResult)
+	}()
 	if err != nil {
 		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(err)).Msg("oauth refresh failed")
 		return "", false, err
@@ -449,6 +480,7 @@ func (p *PublishProcessor) refreshAccessToken(ctx context.Context, account *mode
 	if result.ExpiresAt != nil {
 		account.ExpiresAt = result.ExpiresAt
 	}
+	refreshResult = "success"
 	refreshLogger.Info().Str("event", "oauth_refresh_succeeded").Str("status", "success").Dur("duration", time.Since(start)).Msg("oauth refresh succeeded")
 	return result.AccessToken, true, nil
 }
@@ -484,8 +516,10 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 		return err
 	}
 	if _, err := p.scheduler.Enqueue(retryTask, asynq.ProcessIn(delay), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
+		metrics.QueueFailure("scheduling")
 		return fmt.Errorf("enqueue publish retry: %w", err)
 	}
+	metrics.JobRetried(platform)
 	var rateLimitErr *connectors.RateLimitError
 	if errors.As(cause, &rateLimitErr) {
 		contextLogger.Warn().
@@ -523,6 +557,7 @@ func (p *PublishProcessor) recordPermanentFailure(ctx context.Context, postID, t
 		contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_permanently_failed").Str("status", "permanent_failure").Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("failed to persist permanent publish failure")
 		return err
 	}
+	metrics.JobPermanentlyFailed(account.Platform)
 	contextLogger.Error().Err(logger.RedactError(cause)).Str("event", "publish_permanently_failed").Str("status", "permanent_failure").Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("publish job permanently failed")
 	return nil
 }
@@ -598,6 +633,7 @@ func (p *PublishProcessor) scheduleReconciliation(ctx context.Context, postID, t
 		return err
 	}
 	if _, err := p.scheduler.Enqueue(task, asynq.ProcessIn(0), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
+		metrics.QueueFailure("scheduling")
 		return fmt.Errorf("enqueue reconciliation: %w", err)
 	}
 	log.Info().Str("publication_attempt_id", attempt.ID.String()).Str("post_id", postID.String()).Msg("scheduling publication reconciliation")
