@@ -7,8 +7,10 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
@@ -22,8 +24,21 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		log.Error().Err(err).Msg("Worker stopped with error")
+	}
+}
+
+func run(ctx context.Context) error {
 	// Load .env file in development (ignore if not present)
 	_ = godotenv.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
 
 	// Initialize logging
 	applog.Init("debug")
@@ -33,17 +48,21 @@ func main() {
 	// Database connection
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		log.Fatal().Msg("DATABASE_URL environment variable not set")
+		return fmt.Errorf("DATABASE_URL environment variable not set")
 	}
 
 	db, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to open database")
+		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		log.Info().Str("event", "database_shutdown_started").Msg("Closing PostgreSQL")
+		db.Close()
+		log.Info().Str("event", "database_shutdown_completed").Msg("PostgreSQL closed")
+	}()
 
 	if err := db.Ping(context.Background()); err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to database")
+		return fmt.Errorf("connect to database: %w", err)
 	}
 
 	log.Info().Msg("Connected to database")
@@ -59,16 +78,23 @@ func main() {
 	// The worker uses the same client for explicit, durable business retries.
 	retryClient, err := jobs.NewClient(redisURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to Redis")
+		return fmt.Errorf("connect to Redis: %w", err)
 	}
-	defer retryClient.Close()
+	defer func() {
+		log.Info().Str("event", "redis_shutdown_started").Msg("Closing Redis")
+		if err := retryClient.Close(); err != nil {
+			log.Error().Err(err).Str("component", "redis").Msg("Redis shutdown failed")
+		}
+		log.Info().Str("event", "redis_shutdown_completed").Msg("Redis closed")
+	}()
 
 	log.Info().Str("addr", redisURL).Msg("Connected to Redis")
 
 	encryptionKey := os.Getenv("ENCRYPTION_KEY")
 	if encryptionKey == "" {
-		log.Fatal().Msg("ENCRYPTION_KEY environment variable not set")
+		return fmt.Errorf("ENCRYPTION_KEY environment variable not set")
 	}
+	shutdownTimeout := cfg.ShutdownTimeout
 
 	// Create repositories
 	postsRepo := storage.NewPostRepository(db)
@@ -106,10 +132,7 @@ func main() {
 	}
 
 	// Create worker server
-	srv, err := worker.NewServer(redisURL)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create worker server")
-	}
+	srv := worker.NewServerWithShutdownTimeout(redisURL, shutdownTimeout)
 
 	log.Info().Msg("Worker server initialized")
 
@@ -121,10 +144,6 @@ func main() {
 
 	log.Info().Msg("Job handlers registered")
 
-	// Handle graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -135,11 +154,20 @@ func main() {
 	}()
 
 	select {
-	case sig := <-sigCh:
-		log.Info().Str("signal", sig.String()).Msg("Received shutdown signal")
+	case <-ctx.Done():
+		log.Info().Str("event", "shutdown_started").Str("signal", "received").Msg("Starting graceful worker shutdown")
+		shutdownStarted := time.Now()
 		srv.Shutdown()
-		log.Info().Msg("Worker shut down gracefully")
+		if time.Since(shutdownStarted) >= shutdownTimeout {
+			log.Warn().Str("event", "shutdown_timeout").Str("component", "worker").Dur("duration", time.Since(shutdownStarted)).Msg("Worker shutdown reached its deadline")
+		}
+		if err := <-errCh; err != nil {
+			return err
+		}
+		log.Info().Str("event", "worker_shutdown_completed").Msg("Worker shut down gracefully")
+		log.Info().Str("event", "shutdown_completed").Msg("Worker shutdown complete")
 	case err := <-errCh:
-		log.Fatal().Err(err).Msg("Worker error")
+		return err
 	}
+	return nil
 }

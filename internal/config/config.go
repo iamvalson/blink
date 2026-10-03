@@ -3,29 +3,30 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
-type Config struct{
+type Config struct {
 	// Server
-	Port	int
-	Env 	string
-
+	Port int
+	Env  string
 	// Database
-	DatabaseURL		string
+	DatabaseURL string
 
 	// Redis
-	RedisURL		string
+	RedisURL string
 
 	// Logging
-	LogLevel		string
+	LogLevel        string
+	ShutdownTimeout time.Duration
 
 	// Encryption
-	EncryptionKey	string
+	EncryptionKey string
 
 	// Platform Mode (real, mock)
-	PlatformMode	string
+	PlatformMode string
 }
 
 func Load() (*Config, error) {
@@ -33,19 +34,29 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	return &Config{
-		Port:			getEnvInt("PORT", 8000),
-		Env:			getEnv("ENV", "development"),
-		DatabaseURL:	getEnv("DATABASE_URL", "postgres://blink:devpass@localhost:5432/blink_db"),
-		RedisURL:		getEnv("REDIS_URL", "redis://localhost:6379"),
-		LogLevel:		getEnv("LOG_LEVEL", "info"),
-		EncryptionKey: 	getEnv("ENCRYPTION_KEY", ""),
-		PlatformMode:	getEnv("PLATFORM_MODE", "real"),
+		Port:            getEnvInt("PORT", 8000),
+		Env:             getEnv("ENV", "development"),
+		DatabaseURL:     getEnv("DATABASE_URL", "postgres://blink:devpass@localhost:5432/blink_db"),
+		RedisURL:        getEnv("REDIS_URL", "redis://localhost:6379"),
+		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
+		EncryptionKey:   getEnv("ENCRYPTION_KEY", ""),
+		PlatformMode:    getEnv("PLATFORM_MODE", "real"),
 	}, nil
 }
 
-func getEnv(key, defaultVal string) string{
+func getEnv(key, defaultVal string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultVal
+}
+
+func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil && duration > 0 {
+			return duration
+		}
 	}
 	return defaultVal
 }

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/iamvalson/blink/internal/api"
@@ -26,11 +29,19 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		zlog.Error().Err(err).Msg("API server stopped with error")
+	}
+}
+
+func run(ctx context.Context) error {
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	// Initialize logging
@@ -48,19 +59,23 @@ func main() {
 
 	// Initialize YouTube connector
 	youtubeCfg := youtube.YouTubeConfig{
-		ClientID:    os.Getenv("YOUTUBE_CLIENT_ID"),
+		ClientID:     os.Getenv("YOUTUBE_CLIENT_ID"),
 		ClientSecret: os.Getenv("YOUTUBE_CLIENT_SECRET"),
-		CallbackURL: os.Getenv("YOUTUBE_CALLBACK_URL"),
+		CallbackURL:  os.Getenv("YOUTUBE_CALLBACK_URL"),
 	}
 	youtubeConnector := youtube.New(youtubeCfg)
 
 	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		applog.Fatal(err, "Failed to open database")
+		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		zlog.Info().Str("event", "database_shutdown_started").Msg("Closing PostgreSQL")
+		db.Close()
+		zlog.Info().Str("event", "database_shutdown_completed").Msg("PostgreSQL closed")
+	}()
 	if err := db.Ping(context.Background()); err != nil {
-		applog.Fatal(err, "Failed to connect to database")
+		return fmt.Errorf("connect to database: %w", err)
 	}
 	accounts := storage.NewSocialAccountRepository(db)
 	users := storage.NewUserRepository(db)
@@ -69,7 +84,7 @@ func main() {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		applog.Fatal(err, "Failed to generate JWT keys")
+		return fmt.Errorf("generate JWT keys: %w", err)
 	}
 	jwtService := auth.NewJWTService(privateKey, publicKey)
 	signupService := service.NewSignupService(users, jwtService)
@@ -83,24 +98,43 @@ func main() {
 
 	jobsClient, err := jobs.NewClient(redisURL)
 	if err != nil {
-		applog.Fatal(err, "Failed to create Asynq client")
+		return fmt.Errorf("create Asynq client: %w", err)
 	}
-	defer jobsClient.Close()
+	defer func() {
+		zlog.Info().Str("event", "redis_shutdown_started").Msg("Closing Redis")
+		if err := jobsClient.Close(); err != nil {
+			zlog.Error().Err(err).Str("component", "redis").Msg("Redis shutdown failed")
+		}
+		zlog.Info().Str("event", "redis_shutdown_completed").Msg("Redis closed")
+	}()
 
 	// Initialize outbox dispatcher
 	dispatcher := outbox.NewDispatcher(outboxRepo, jobsClient)
 
 	// Start outbox dispatcher in background (runs every 5 seconds)
+	var dispatcherWG sync.WaitGroup
+	dispatcherCtx, stopDispatcher := context.WithCancel(ctx)
+	defer func() {
+		stopDispatcher()
+		dispatcherWG.Wait()
+	}()
+	dispatcherWG.Add(1)
 	go func() {
+		defer dispatcherWG.Done()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := dispatcher.ProcessPendingEvents(ctx); err != nil {
-				zlog.Error().Err(err).Msg("Failed to process pending events")
+		for {
+			select {
+			case <-dispatcherCtx.Done():
+				return
+			case <-ticker.C:
+				operationCtx, cancel := context.WithTimeout(dispatcherCtx, 10*time.Second)
+				if err := dispatcher.ProcessPendingEvents(operationCtx); err != nil {
+					zlog.Error().Err(err).Msg("Failed to process pending events")
+				}
+				cancel()
 			}
-			cancel()
 		}
 	}()
 
@@ -121,10 +155,29 @@ func main() {
 		Handler: router,
 	}
 
-	zlog.Info().Str("addr", addr).Msg("HTTP server listening")
+	serverErr := make(chan error, 1)
+	go func() {
+		zlog.Info().Str("addr", addr).Msg("HTTP server listening")
+		serverErr <- server.ListenAndServe()
+	}()
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		applog.Fatal(err, "Server crashed")
+	select {
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("server crashed: %w", err)
+		}
+	case <-ctx.Done():
+		zlog.Info().Str("event", "shutdown_started").Str("signal", "received").Msg("Starting graceful shutdown")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		zlog.Info().Str("event", "http_shutdown_started").Msg("Stopping HTTP server")
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			zlog.Error().Err(err).Str("component", "http").Str("event", "shutdown_timeout").Msg("HTTP shutdown did not complete")
+		} else {
+			zlog.Info().Str("event", "http_shutdown_completed").Msg("HTTP server stopped")
+		}
+		stopDispatcher()
+		zlog.Info().Str("event", "shutdown_completed").Msg("API shutdown complete")
 	}
+	return nil
 }
-

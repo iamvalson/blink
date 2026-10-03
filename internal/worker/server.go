@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"time"
+
 	"github.com/hibiken/asynq"
 )
 
@@ -9,6 +11,10 @@ type Server struct {
 }
 
 func NewServer(redisAddr string) (*Server, error) {
+	return NewServerWithShutdownTimeout(redisAddr, 30*time.Second), nil
+}
+
+func NewServerWithShutdownTimeout(redisAddr string, shutdownTimeout time.Duration) *Server {
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: redisAddr},
 		asynq.Config{
@@ -16,11 +22,12 @@ func NewServer(redisAddr string) (*Server, error) {
 			Queues: map[string]int{
 				"default": 10,
 			},
-			LogLevel: asynq.InfoLevel,
+			LogLevel:        asynq.InfoLevel,
+			ShutdownTimeout: shutdownTimeout,
 		},
 	)
 
-	return &Server{server: srv}, nil
+	return &Server{server: srv}
 }
 
 func (s *Server) Start(mux *asynq.ServeMux) error {
