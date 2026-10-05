@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -27,6 +28,9 @@ type Config struct {
 
 	// Platform Mode (real, mock)
 	PlatformMode string
+
+	// CORS Origins
+	CORSOrigins []string
 }
 
 func Load() (*Config, error) {
@@ -42,6 +46,7 @@ func Load() (*Config, error) {
 		ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
 		EncryptionKey:   getEnv("ENCRYPTION_KEY", ""),
 		PlatformMode:    getEnv("PLATFORM_MODE", "real"),
+		CORSOrigins:     getEnvStringSlice("CORS_ORIGINS", []string{"http://localhost:3000"}),
 	}, nil
 }
 
@@ -68,4 +73,23 @@ func getEnvInt(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+func getEnvStringSlice(key string, defaultVal []string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultVal
+	}
+	parts := strings.Split(value, ",")
+	var result []string
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return defaultVal
+	}
+	return result
 }

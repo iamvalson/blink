@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/iamvalson/blink/internal/api/handler"
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
@@ -34,8 +35,19 @@ func NewRouter(
 	loginService *service.LoginService,
 	meService *service.MeService,
 	jwtService *auth.JWTService,
+	corsOrigins []string,
 ) *chi.Mux {
 	r := chi.NewRouter()
+
+	// CORS middleware - outermost so preflight OPTIONS requests are handled cleanly
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   corsOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
 
 	// Middleware
 	r.Use(chiMiddleware.Logger)

@@ -12,7 +12,7 @@ import (
 func TestMetricsEndpoint(t *testing.T) {
 	metrics.JobProcessed(metrics.PlatformTwitter)
 	metrics.ObservePublishDuration(metrics.PlatformTwitter, 0.01)
-	router := NewRouter(nil, nil, nil, "", nil, nil, nil, nil)
+	router := NewRouter(nil, nil, nil, "", nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()
@@ -32,3 +32,31 @@ func TestMetricsEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestCORSOptionsPreflight(t *testing.T) {
+	origins := []string{"http://localhost:3000"}
+	router := NewRouter(nil, nil, nil, "", nil, nil, nil, nil, origins)
+
+	req := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type")
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK && resp.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight status 200 or 204, got %d", resp.Code)
+	}
+
+	allowOrigin := resp.Header().Get("Access-Control-Allow-Origin")
+	if allowOrigin != "http://localhost:3000" {
+		t.Errorf("expected Access-Control-Allow-Origin to be 'http://localhost:3000', got %q", allowOrigin)
+	}
+
+	allowCredentials := resp.Header().Get("Access-Control-Allow-Credentials")
+	if allowCredentials != "true" {
+		t.Errorf("expected Access-Control-Allow-Credentials to be 'true', got %q", allowCredentials)
+	}
+}
+
