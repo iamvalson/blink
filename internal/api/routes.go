@@ -32,6 +32,7 @@ func NewRouter(
 	encryptionKey string,
 	signupService *service.SignupService,
 	loginService *service.LoginService,
+	meService *service.MeService,
 	jwtService *auth.JWTService,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -50,10 +51,12 @@ func NewRouter(
 	// Auth routes
 	signupHandler := handler.NewSignupHandler(signupService)
 	loginHandler := handler.NewLoginHandler(loginService)
+	meHandler := handler.NewMeHandler(meService)
 
 	r.Post("/auth/signup", signupHandler.Signup)
 	r.Post("/auth/login", loginHandler.Login)
 	r.Post("/auth/logout", handler.Logout)
+	r.With(middleware.RequireAuth(jwtService)).Get("/auth/me", meHandler.Me)
 
 	// Register one pair of OAuth routes per connected platform.
 	// Each AuthHandler is platform-agnostic; the connector carries the identity.

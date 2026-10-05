@@ -12,7 +12,7 @@ import (
 func TestMetricsEndpoint(t *testing.T) {
 	metrics.JobProcessed(metrics.PlatformTwitter)
 	metrics.ObservePublishDuration(metrics.PlatformTwitter, 0.01)
-	router := NewRouter(nil, nil, nil, "", nil, nil, nil)
+	router := NewRouter(nil, nil, nil, "", nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()

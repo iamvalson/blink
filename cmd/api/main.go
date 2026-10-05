@@ -89,6 +89,7 @@ func run(ctx context.Context) error {
 	jwtService := auth.NewJWTService(privateKey, publicKey)
 	signupService := service.NewSignupService(users, jwtService)
 	loginService := service.NewLoginService(users, jwtService)
+	meService := service.NewMeService(users)
 
 	// Initialize Redis for Asynq job queue
 	redisURL := os.Getenv("REDIS_URL")
@@ -145,7 +146,7 @@ func run(ctx context.Context) error {
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector}
-	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, signupService, loginService, jwtService)
+	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, signupService, loginService, meService, jwtService)
 
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)
