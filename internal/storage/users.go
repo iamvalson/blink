@@ -57,6 +57,27 @@ func (r *UserRepository) Create(
 	return userID, nil
 }
 
+func (r *UserRepository) GetByID(
+	ctx context.Context,
+	id string,
+) (*User, error) {
+	const query = `
+		SELECT id, email, display_name FROM users WHERE id = $1
+	`
+
+	var user User
+
+	err := r.db.QueryRow(ctx, query, id).Scan(&user.ID, &user.Email, &user.DisplayName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+	return &user, nil
+}
+
 func (r *UserRepository) GetByEmail(
 	ctx context.Context,
 	email string,

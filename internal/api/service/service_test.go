@@ -176,3 +176,54 @@ func TestLoginRejectsInvalidCredentials(t *testing.T) {
 		t.Fatalf("database expectations were not met: %v", err)
 	}
 }
+
+func TestMeReturnsUserProfile(t *testing.T) {
+	users, _, db, cleanup := newServiceTestDependencies(t)
+	defer cleanup()
+
+	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name FROM users WHERE id = $1")).
+		WithArgs("user-123").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "email", "display_name"}).AddRow(
+			"user-123", "alice@example.com", "Alice",
+		))
+
+	svc := NewMeService(users)
+	result, err := svc.Me(context.Background(), "user-123")
+	if err != nil {
+		t.Fatalf("Me failed: %v", err)
+	}
+
+	if result.ID != "user-123" {
+		t.Errorf("ID: want %q, got %q", "user-123", result.ID)
+	}
+	if result.Email != "alice@example.com" {
+		t.Errorf("Email: want %q, got %q", "alice@example.com", result.Email)
+	}
+	if result.DisplayName != "Alice" {
+		t.Errorf("DisplayName: want %q, got %q", "Alice", result.DisplayName)
+	}
+
+	if err := db.ExpectationsWereMet(); err != nil {
+		t.Fatalf("database expectations were not met: %v", err)
+	}
+}
+
+func TestMeReturnsErrUserNotFoundWhenUserDeleted(t *testing.T) {
+	users, _, db, cleanup := newServiceTestDependencies(t)
+	defer cleanup()
+
+	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name FROM users WHERE id = $1")).
+		WithArgs("ghost-user").
+		WillReturnError(pgx.ErrNoRows)
+
+	svc := NewMeService(users)
+	_, err := svc.Me(context.Background(), "ghost-user")
+	if err != ErrUserNotFound {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+
+	if err := db.ExpectationsWereMet(); err != nil {
+		t.Fatalf("database expectations were not met: %v", err)
+	}
+}
+
