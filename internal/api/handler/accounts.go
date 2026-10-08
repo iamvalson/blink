@@ -42,7 +42,9 @@ func (h *AccountsHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(listAccountsResponse{Accounts: accounts})
+	if err := json.NewEncoder(w).Encode(listAccountsResponse{Accounts: accounts}); err != nil {
+		log.Error().Err(err).Str("user_id", userID).Msg("Failed to encode account list")
+	}
 }
 
 func (h *AccountsHandler) DisconnectAccount(w http.ResponseWriter, r *http.Request) {
