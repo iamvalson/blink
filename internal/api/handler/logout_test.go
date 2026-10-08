@@ -10,7 +10,7 @@ func TestLogoutExpiresAuthCookie(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 
-	Logout(recorder, request)
+	NewLogoutHandler(false, http.SameSiteLaxMode)(recorder, request)
 
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", recorder.Code)

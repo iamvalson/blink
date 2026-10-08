@@ -137,8 +137,11 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 				firstErr = err
 			}
 			if publishClassification(err) == connectors.ErrorRetryable {
-				if scheduleErr := p.scheduleRetry(ctx, job.PostID, target.ID, task, err); scheduleErr != nil && firstErr == err {
-					firstErr = scheduleErr
+				if scheduleErr := p.scheduleRetry(ctx, job.PostID, target.ID, task, err); scheduleErr != nil {
+					contextLogger.Error().Err(logger.RedactError(scheduleErr)).Str("event", "publish_retry_schedule_failed").Str("status", "failed").Msg("failed to schedule publish retry")
+					if firstErr == err {
+						firstErr = scheduleErr
+					}
 				}
 			} else if publishClassification(err) == connectors.ErrorAmbiguous {
 				if scheduleErr := p.scheduleReconciliation(ctx, job.PostID, target.ID); scheduleErr != nil && firstErr == err {

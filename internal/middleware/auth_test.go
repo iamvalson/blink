@@ -89,7 +89,7 @@ func TestRequireAuthRejectsExpiredJWT(t *testing.T) {
 func TestRequireAuthAddsRealUserIDToContext(t *testing.T) {
 	jwtService, _ := newMiddlewareJWTService(t)
 
-	token, err := jwtService.CreateAccessToken("user-123")
+	token, err := jwtService.CreateAccessToken("user-123", false)
 	if err != nil {
 		t.Fatalf("failed to create access token: %v", err)
 	}

@@ -136,6 +136,7 @@ func TestPublishPipelineIntegrationWithMockConnector(t *testing.T) {
 			t.Fatalf("failed to apply migration schema: %v", execErr)
 		}
 	}
+	ensureRetryMigration(t, ctx, db)
 
 	// 1. Create a test user
 	testUserID := uuid.New()
@@ -428,14 +429,31 @@ func ensureRetryMigration(t *testing.T, ctx context.Context, db *pgxpool.Pool) {
 		}
 	}
 
-	var hasRetryColumn bool
-	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'publication_attempts' AND column_name = 'next_retry_at')`).Scan(&hasRetryColumn); err != nil {
+	var hasRetryColumn, hasFailureTable bool
+	if err := db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'publication_attempts' AND column_name = 'next_retry_at'
+		), EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_name = 'publication_attempt_failures'
+		)
+	`).Scan(&hasRetryColumn, &hasFailureTable); err != nil {
 		t.Fatalf("check retry migration: %v", err)
 	}
-	if hasRetryColumn {
-		return
+	if !hasRetryColumn {
+		for _, migration := range []string{"../migrations/000002_publication_reliability.up.sql", "../migrations/000003_publication_retry.up.sql"} {
+			data, err := os.ReadFile(migration)
+			if err != nil {
+				t.Fatalf("read migration %s: %v", migration, err)
+			}
+			if _, err := db.Exec(ctx, string(data)); err != nil {
+				t.Fatalf("apply migration %s: %v", migration, err)
+			}
+		}
 	}
-	for _, migration := range []string{"../migrations/000002_publication_reliability.up.sql", "../migrations/000003_publication_retry.up.sql"} {
+	if !hasFailureTable {
+		migration := "../migrations/000004_dead_letter_queue.up.sql"
 		data, err := os.ReadFile(migration)
 		if err != nil {
 			t.Fatalf("read migration %s: %v", migration, err)

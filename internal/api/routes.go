@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -31,11 +32,15 @@ func NewRouter(
 	accounts *storage.SocialAccountRepository,
 	posts *storage.PostRepository,
 	encryptionKey string,
+	frontendURL string,
 	signupService *service.SignupService,
 	loginService *service.LoginService,
 	meService *service.MeService,
 	jwtService *auth.JWTService,
 	corsOrigins []string,
+	secureCookie bool,
+	cookieSecure bool,
+	cookieSameSite http.SameSite,
 ) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -43,7 +48,7 @@ func NewRouter(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   corsOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "Idempotency-Key"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -61,27 +66,44 @@ func NewRouter(
 	r.Handle("/metrics", promhttp.Handler())
 
 	// Auth routes
-	signupHandler := handler.NewSignupHandler(signupService)
-	loginHandler := handler.NewLoginHandler(loginService)
+	signupHandler := handler.NewSignupHandler(signupService, secureCookie, cookieSecure, cookieSameSite)
+	loginHandler := handler.NewLoginHandler(loginService, secureCookie, cookieSecure, cookieSameSite)
 	meHandler := handler.NewMeHandler(meService)
 
 	r.Post("/auth/signup", signupHandler.Signup)
 	r.Post("/auth/login", loginHandler.Login)
-	r.Post("/auth/logout", handler.Logout)
+	r.Post("/auth/logout", handler.NewLogoutHandler(cookieSecure, cookieSameSite))
 	r.With(middleware.RequireAuth(jwtService)).Get("/auth/me", meHandler.Me)
 
 	// Register one pair of OAuth routes per connected platform.
 	// Each AuthHandler is platform-agnostic; the connector carries the identity.
+	//
+	// Security model:
+	//   - Initiation (/auth/<platform>): requires auth_token cookie. The authenticated
+	//     user ID is embedded in the server-side OAuth transaction at this point.
+	//   - Callback (/auth/<platform>/callback): does NOT require auth_token. The
+	//     callback uses the server-side transaction (keyed by the cryptographically
+	//     random `state`) to recover the user ID. This allows the callback to work
+	//     across different origins/domains (e.g. ngrok in development, production CDN)
+	//     without weakening cookie security.
 	for _, connector := range oauthConnectors {
-		authHandler := handler.NewAuthHandler(connector, accounts, encryptionKey)
+		authHandler := handler.NewAuthHandler(connector, accounts, encryptionKey, frontendURL, secureCookie)
 		platformID := connector.PlatformID()
 
+		// Initiation requires authentication — only a logged-in user can start OAuth.
 		r.With(middleware.RequireAuth(jwtService)).
 			Get(fmt.Sprintf("/auth/%s", platformID), authHandler.OAuthStart)
 
-		r.With(middleware.RequireAuth(jwtService)).
-			Get(fmt.Sprintf("/auth/%s/callback", platformID), authHandler.OAuthCallback)
+		// Callback does NOT require the auth_token cookie.
+		// User identity comes from the consumed OAuth transaction.
+		r.Get(fmt.Sprintf("/auth/%s/callback", platformID), authHandler.OAuthCallback)
 	}
+
+	// Accounts routes
+	accountsService := service.NewAccountsService(accounts)
+	accountsHandler := handler.NewAccountsHandler(accountsService)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts", accountsHandler.ListAccounts)
+	r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/accounts/{platform}", accountsHandler.DisconnectAccount)
 
 	// Post routes
 	postService := service.NewPostService(posts)
