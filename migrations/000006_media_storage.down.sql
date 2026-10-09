@@ -1,0 +1,3 @@
+ALTER TABLE posts DROP COLUMN IF EXISTS media_id;
+DROP TABLE IF EXISTS media;
+

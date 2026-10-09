@@ -1,8 +1,10 @@
 package config
 
 import (
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -10,8 +12,11 @@ import (
 
 type Config struct {
 	// Server
-	Port int
-	Env  string
+	Port           int
+	Env            string
+	SecureCookie   bool
+	CookieSecure   bool
+	CookieSameSite http.SameSite
 	// Database
 	DatabaseURL string
 
@@ -27,21 +32,43 @@ type Config struct {
 
 	// Platform Mode (real, mock)
 	PlatformMode string
+
+	// Frontend config
+	FrontendURL string
+
+	// Media Storage
+	MediaStoragePath string
+
+	// CORS Origins
+	CORSOrigins []string
 }
 
 func Load() (*Config, error) {
 	// Load .env file in development (ignore if not present)
 	_ = godotenv.Load()
+	env := getEnv("ENV", "development")
+
+	production := strings.EqualFold(env, "production")
+	cookieSameSite := http.SameSiteNoneMode
+	if production {
+		cookieSameSite = http.SameSiteLaxMode
+	}
 
 	return &Config{
-		Port:            getEnvInt("PORT", 8000),
-		Env:             getEnv("ENV", "development"),
-		DatabaseURL:     getEnv("DATABASE_URL", "postgres://blink:devpass@localhost:5432/blink_db"),
-		RedisURL:        getEnv("REDIS_URL", "redis://localhost:6379"),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
-		ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
-		EncryptionKey:   getEnv("ENCRYPTION_KEY", ""),
-		PlatformMode:    getEnv("PLATFORM_MODE", "real"),
+		Port:             getEnvInt("PORT", 8000),
+		Env:              env,
+		SecureCookie:     production,
+		CookieSecure:     true,
+		CookieSameSite:   cookieSameSite,
+		DatabaseURL:      getEnv("DATABASE_URL", "postgres://blink:devpass@localhost:5432/blink_db"),
+		RedisURL:         getEnv("REDIS_URL", "redis://localhost:6379"),
+		LogLevel:         getEnv("LOG_LEVEL", "info"),
+		ShutdownTimeout:  getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
+		EncryptionKey:    getEnv("ENCRYPTION_KEY", ""),
+		PlatformMode:     getEnv("PLATFORM_MODE", "real"),
+		FrontendURL:      getEnv("FRONTEND_URL", "http://localhost:3000"),
+		MediaStoragePath: getEnv("MEDIA_STORAGE_PATH", "./media_uploads"),
+		CORSOrigins:      getEnvStringSlice("CORS_ORIGINS", []string{"http://localhost:3000"}),
 	}, nil
 }
 
@@ -68,4 +95,23 @@ func getEnvInt(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+func getEnvStringSlice(key string, defaultVal []string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultVal
+	}
+	parts := strings.Split(value, ",")
+	var result []string
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return defaultVal
+	}
+	return result
 }

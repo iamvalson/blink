@@ -117,14 +117,14 @@ func (r *PublicationRepository) GetPostForPublishing(ctx context.Context, postID
 	err := r.db.QueryRow(
 		ctx,
 		`
-            SELECT id, user_id, caption, media_url, media_type, status, created_at, updated_at
+            SELECT id, user_id, caption, media_url, media_type, media_id, status, created_at, updated_at
             FROM posts
             WHERE id = $1
         `,
 		postID,
 	).Scan(
 		&post.ID, &post.UserID, &post.Caption, &post.MediaURL, &post.MediaType,
-		&post.Status, &post.CreatedAt, &post.UpdatedAt,
+		&post.MediaID, &post.Status, &post.CreatedAt, &post.UpdatedAt,
 	)
 
 	if err != nil {

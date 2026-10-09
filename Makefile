@@ -23,12 +23,18 @@ run-worker:
 
 migrate-up:
 	@echo "Running migrations..."
-	psql -v ON_ERROR_STOP=1 "$(DATABASE_URL)?sslmode=disable" -f migrations/000001_init_schema.up.sql
+	@for f in $(shell ls migrations/*.up.sql | sort); do \
+		echo "  Applying $$f..."; \
+		psql -v ON_ERROR_STOP=1 "$(DATABASE_URL)?sslmode=disable" -f $$f; \
+	done
 	@echo "Migrations complete"
 
 migrate-down:
 	@echo "Rolling back migrations..."
-	psql -v ON_ERROR_STOP=1 "$(DATABASE_URL)?sslmode=disable" -f migrations/000001_init_schema.down.sql
+	@for f in $(shell ls migrations/*.down.sql | sort -r); do \
+		echo "  Reverting $$f..."; \
+		psql -v ON_ERROR_STOP=1 "$(DATABASE_URL)?sslmode=disable" -f $$f; \
+	done
 	@echo "Rollback complete"
 
 db-setup: up migrate-up

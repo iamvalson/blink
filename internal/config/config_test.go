@@ -43,3 +43,24 @@ func TestLoadShutdownTimeoutDefault(t *testing.T) {
 		t.Fatalf("ShutdownTimeout = %s, want 30s", cfg.ShutdownTimeout)
 	}
 }
+
+func TestLoadSecureCookieIsEnabledOnlyInProduction(t *testing.T) {
+	t.Setenv("ENV", "production")
+
+	production, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !production.SecureCookie {
+		t.Fatal("SecureCookie = false in production, want true")
+	}
+
+	t.Setenv("ENV", "development")
+	development, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if development.SecureCookie {
+		t.Fatal("SecureCookie = true in development, want false")
+	}
+}

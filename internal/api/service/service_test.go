@@ -125,8 +125,9 @@ func TestLoginSucceedsWithValidCredentials(t *testing.T) {
 
 	service := NewLoginService(users, jwtService)
 	result, err := service.Login(context.Background(), LoginInput{
-		Email:    " PERSON@EXAMPLE.COM ",
-		Password: "strong-password",
+		Email:      " PERSON@EXAMPLE.COM ",
+		Password:   "strong-password",
+		RememberMe: true,
 	})
 	if err != nil {
 		t.Fatalf("Login failed: %v", err)
@@ -142,6 +143,9 @@ func TestLoginSucceedsWithValidCredentials(t *testing.T) {
 	}
 	if userID != "user-123" {
 		t.Fatalf("expected JWT subject user-123, got %s", userID)
+	}
+	if result.SessionDuration != auth.AccessTokenLifetime(true) {
+		t.Fatalf("expected remembered session duration %s, got %s", auth.AccessTokenLifetime(true), result.SessionDuration)
 	}
 
 	if err := db.ExpectationsWereMet(); err != nil {
@@ -226,4 +230,3 @@ func TestMeReturnsErrUserNotFoundWhenUserDeleted(t *testing.T) {
 		t.Fatalf("database expectations were not met: %v", err)
 	}
 }
-
