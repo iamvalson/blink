@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamvalson/blink/internal/api"
+	"github.com/iamvalson/blink/internal/api/handler"
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/config"
@@ -21,6 +22,7 @@ import (
 	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
 	applog "github.com/iamvalson/blink/internal/log"
+	"github.com/iamvalson/blink/internal/mediastore"
 	"github.com/iamvalson/blink/internal/outbox"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -141,12 +143,21 @@ func run(ctx context.Context) error {
 
 	zlog.Info().Msg("Outbox dispatcher started")
 
+	// Media Storage & Service
+	localMediaStore, err := mediastore.NewLocalStore(cfg.MediaStoragePath)
+	if err != nil {
+		return fmt.Errorf("initialize media store: %w", err)
+	}
+	mediaRepo := storage.NewMediaRepository(db)
+	mediaService := service.NewMediaService(mediaRepo, localMediaStore)
+	mediaHandler := handler.NewMediaHandler(mediaService)
+
 	// Router Setup
 	//
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector}
-	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite)
+	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, mediaHandler)
 
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)

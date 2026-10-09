@@ -41,6 +41,7 @@ func NewRouter(
 	secureCookie bool,
 	cookieSecure bool,
 	cookieSameSite http.SameSite,
+	mediaHandlers ...*handler.MediaHandler,
 ) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -113,6 +114,13 @@ func NewRouter(
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/{id}", postHandler.GetPost)
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/posts", postHandler.CreatePost)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/posts/{id}", postHandler.GetPost)
+
+	// Media routes
+	if len(mediaHandlers) > 0 && mediaHandlers[0] != nil {
+		mh := mediaHandlers[0]
+		r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/media", mh.Upload)
+		r.With(middleware.RequireAuth(jwtService)).Post("/api/media", mh.Upload)
+	}
 
 	return r
 }

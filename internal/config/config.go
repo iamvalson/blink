@@ -36,6 +36,9 @@ type Config struct {
 	// Frontend config
 	FrontendURL string
 
+	// Media Storage
+	MediaStoragePath string
+
 	// CORS Origins
 	CORSOrigins []string
 }
@@ -52,19 +55,20 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Port:            getEnvInt("PORT", 8000),
-		Env:             env,
-		SecureCookie:    production,
-		CookieSecure:    true,
-		CookieSameSite:  cookieSameSite,
-		DatabaseURL:     getEnv("DATABASE_URL", "postgres://blink:devpass@localhost:5432/blink_db"),
-		RedisURL:        getEnv("REDIS_URL", "redis://localhost:6379"),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
-		ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
-		EncryptionKey:   getEnv("ENCRYPTION_KEY", ""),
-		PlatformMode:    getEnv("PLATFORM_MODE", "real"),
-		FrontendURL:     getEnv("FRONTEND_URL", "http://localhost:3000"),
-		CORSOrigins:     getEnvStringSlice("CORS_ORIGINS", []string{"http://localhost:3000"}),
+		Port:             getEnvInt("PORT", 8000),
+		Env:              env,
+		SecureCookie:     production,
+		CookieSecure:     true,
+		CookieSameSite:   cookieSameSite,
+		DatabaseURL:      getEnv("DATABASE_URL", "postgres://blink:devpass@localhost:5432/blink_db"),
+		RedisURL:         getEnv("REDIS_URL", "redis://localhost:6379"),
+		LogLevel:         getEnv("LOG_LEVEL", "info"),
+		ShutdownTimeout:  getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
+		EncryptionKey:    getEnv("ENCRYPTION_KEY", ""),
+		PlatformMode:     getEnv("PLATFORM_MODE", "real"),
+		FrontendURL:      getEnv("FRONTEND_URL", "http://localhost:3000"),
+		MediaStoragePath: getEnv("MEDIA_STORAGE_PATH", "./media_uploads"),
+		CORSOrigins:      getEnvStringSlice("CORS_ORIGINS", []string{"http://localhost:3000"}),
 	}, nil
 }
 

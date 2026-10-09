@@ -11,6 +11,7 @@ type CreatePostInput struct {
 	Caption		*string		`json:"caption"`
 	MediaURL	*string		`json:"media_url"`
 	MediaType	*string		`json:"media_type"`
+	MediaID		*uuid.UUID	`json:"media_id,omitempty"`
 	Targets		[]uuid.UUID	`json:"targets"`
 }
 
@@ -20,6 +21,7 @@ type Post struct {
 	Caption *string `json:"caption,omitempty"` 
 	MediaURL *string `json:"media_url,omitempty"` 
 	MediaType *string `json:"media_type,omitempty"` 
+	MediaID *uuid.UUID `json:"media_id,omitempty"`
 	Status string `json:"status"` 
 	CreatedAt time.Time `json:"created_at"` 
 	UpdatedAt time.Time `json:"updated_at"` 
@@ -44,6 +46,7 @@ type PostWithDetails struct {
 	Caption   *string            `json:"caption,omitempty"`
 	MediaURL  *string            `json:"media_url,omitempty"`
 	MediaType *string            `json:"media_type,omitempty"`
+	MediaID   *uuid.UUID         `json:"media_id,omitempty"`
 	Status    string             `json:"status"`
 	Targets   []PostTargetDetail `json:"targets"`
 	CreatedAt time.Time          `json:"created_at"`

@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,8 +18,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hibiken/asynq"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/jobs"
 	"github.com/iamvalson/blink/internal/model"
 )
 
@@ -501,4 +504,167 @@ func stringPtrIfSet(value string) *string {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+type testScheduler struct {
+	enqueuedTasks []*asynq.Task
+}
+
+func (s *testScheduler) Enqueue(task *asynq.Task, opts ...asynq.Option) (string, error) {
+	s.enqueuedTasks = append(s.enqueuedTasks, task)
+	return "test-task-id", nil
+}
+
+type testMediaStore struct {
+	content []byte
+}
+
+func (s *testMediaStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(s.content)), nil
+}
+
+type testMediaRepo struct {
+	media *model.Media
+}
+
+func (r *testMediaRepo) GetMediaByID(ctx context.Context, id uuid.UUID) (*model.Media, error) {
+	if r.media != nil && r.media.ID == id {
+		return r.media, nil
+	}
+	return nil, errors.New("media not found")
+}
+
+type youtubeMockConnector struct {
+	uploadedMediaID string
+	publishedPostID string
+	uploadCalled    bool
+	publishCalled   bool
+	reconcileCalled bool
+}
+
+func (y *youtubeMockConnector) Authenticate(ctx context.Context, params connectors.AuthParams) (connectors.AuthResult, error) {
+	return connectors.AuthResult{}, nil
+}
+
+func (y *youtubeMockConnector) UploadMedia(ctx context.Context, token string, attemptID string, media io.Reader, mediaType string) (string, error) {
+	y.uploadCalled = true
+	y.uploadedMediaID = "yt-vid-999"
+	return y.uploadedMediaID, nil
+}
+
+func (y *youtubeMockConnector) Publish(ctx context.Context, token string, attemptID string, caption string, mediaIDs ...string) (string, string, error) {
+	y.publishCalled = true
+	if len(mediaIDs) == 0 {
+		return "", "", connectors.NewClassifiedError(connectors.ErrorPermanent, "MEDIA_REQUIRED", errors.New("YouTube publishing requires a video"))
+	}
+	y.publishedPostID = mediaIDs[0]
+	return "https://youtube.com/watch?v=" + y.publishedPostID, y.publishedPostID, nil
+}
+
+func (y *youtubeMockConnector) GetStatus(ctx context.Context, platformPostID string) (string, string, error) {
+	return "published", "https://youtube.com/watch?v=" + platformPostID, nil
+}
+
+func (y *youtubeMockConnector) ReconcilePublish(ctx context.Context, token string, platformUserID string, attemptID string, caption string) (connectors.ReconciliationResult, error) {
+	y.reconcileCalled = true
+	return connectors.ReconciliationResult{Outcome: connectors.ReconciliationUnknown}, nil
+}
+
+func TestPublishToTarget_YouTubeMissingVideo_PermanentFailureNoReconciliation(t *testing.T) {
+	postID := uuid.New()
+	targetID := uuid.New()
+	attemptID := uuid.New()
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	encryptedToken, err := auth.EncryptToken("access-token", key)
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+
+	store := &recoveryStore{
+		post:    &model.Post{ID: postID, Caption: stringPtr("hello"), Status: "QUEUED"}, // no MediaURL and no MediaID
+		target:  model.PostTarget{ID: targetID, PostID: postID, Status: "PENDING"},
+		account: model.SocialAccount{Platform: connectors.PlatformYoutube, PlatformUserID: "channel-123", AccessToken: encryptedToken},
+		attempt: model.PublicationAttempt{ID: attemptID, PostTargetID: targetID, Status: "PENDING", CreatedAt: time.Now()},
+	}
+
+	ytConnector := &youtubeMockConnector{}
+	scheduler := &testScheduler{}
+
+	processor := NewPublishProcessor(nil, store, map[string]connectors.PlatformConnector{
+		connectors.PlatformYoutube: ytConnector,
+	}, key, scheduler)
+
+	task, _ := jobs.NewPublishTask(postID)
+	err = processor.ProcessPublishJob(context.Background(), task)
+	if err != nil {
+		t.Fatalf("ProcessPublishJob returned error: %v", err)
+	}
+
+	// Verify attempt failed permanently
+	if store.attempt.Status != "FAILED" {
+		t.Fatalf("expected attempt status FAILED, got %s", store.attempt.Status)
+	}
+
+	// Verify reconciliation was NEVER called
+	if ytConnector.reconcileCalled {
+		t.Fatal("reconciliation should NEVER be called for missing video pre-publish error")
+	}
+
+	// Verify no reconciliation task was enqueued
+	if len(scheduler.enqueuedTasks) > 0 {
+		t.Fatalf("expected 0 retry/reconciliation tasks scheduled, got %d", len(scheduler.enqueuedTasks))
+	}
+}
+
+func TestPublishToTarget_WithPersistentMedia_Success(t *testing.T) {
+	postID := uuid.New()
+	targetID := uuid.New()
+	attemptID := uuid.New()
+	mediaID := uuid.New()
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	encryptedToken, err := auth.EncryptToken("access-token", key)
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+
+	store := &recoveryStore{
+		post:    &model.Post{ID: postID, Caption: stringPtr("video post"), MediaID: &mediaID, Status: "QUEUED"},
+		target:  model.PostTarget{ID: targetID, PostID: postID, Status: "PENDING"},
+		account: model.SocialAccount{Platform: connectors.PlatformYoutube, PlatformUserID: "channel-123", AccessToken: encryptedToken},
+		attempt: model.PublicationAttempt{ID: attemptID, PostTargetID: targetID, Status: "PENDING", CreatedAt: time.Now()},
+	}
+
+	mediaRepo := &testMediaRepo{
+		media: &model.Media{
+			ID:           mediaID,
+			StorageKey:   "users/123/video.mp4",
+			ContentType:  "video/mp4",
+			UploadStatus: "complete",
+		},
+	}
+	mediaStore := &testMediaStore{content: []byte("video data")}
+
+	ytConnector := &youtubeMockConnector{}
+	processor := NewPublishProcessor(nil, store, map[string]connectors.PlatformConnector{
+		connectors.PlatformYoutube: ytConnector,
+	}, key).WithMediaStore(mediaRepo, mediaStore)
+
+	task, _ := jobs.NewPublishTask(postID)
+	err = processor.ProcessPublishJob(context.Background(), task)
+	if err != nil {
+		t.Fatalf("ProcessPublishJob returned error: %v", err)
+	}
+
+	if !ytConnector.uploadCalled {
+		t.Fatal("expected UploadMedia to be called with persistent media")
+	}
+	if !ytConnector.publishCalled {
+		t.Fatal("expected Publish to be called after media upload")
+	}
+	if store.attempt.Status != "SUCCEEDED" {
+		t.Fatalf("expected attempt status SUCCEEDED, got %s", store.attempt.Status)
+	}
+	if store.target.Status != "PUBLISHED" {
+		t.Fatalf("expected target status PUBLISHED, got %s", store.target.Status)
+	}
 }

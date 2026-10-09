@@ -25,12 +25,30 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var mediaDownloadClient = &http.Client{Timeout: 5 * time.Minute}
+
+type mediaStore interface {
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
+}
+
+type mediaRepository interface {
+	GetMediaByID(ctx context.Context, id uuid.UUID) (*model.Media, error)
+}
+
 type PublishProcessor struct {
 	posts         *storage.PostRepository
 	publications  publicationStore
 	connectors    map[string]connectors.PlatformConnector
 	encryptionKey string
 	scheduler     publishScheduler
+	mediaRepo     mediaRepository
+	mediaStore    mediaStore
+}
+
+func (p *PublishProcessor) WithMediaStore(repo mediaRepository, store mediaStore) *PublishProcessor {
+	p.mediaRepo = repo
+	p.mediaStore = store
+	return p
 }
 
 type publishScheduler interface {
@@ -146,6 +164,10 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 			} else if publishClassification(err) == connectors.ErrorAmbiguous {
 				if scheduleErr := p.scheduleReconciliation(ctx, job.PostID, target.ID); scheduleErr != nil && firstErr == err {
 					firstErr = scheduleErr
+				}
+			} else if publishClassification(err) == connectors.ErrorPermanent {
+				if permErr := p.recordPermanentFailure(ctx, job.PostID, target.ID, task, nil, err); permErr != nil {
+					contextLogger.Error().Err(logger.RedactError(permErr)).Str("event", "publish_permanent_record_failed").Str("status", "failed").Msg("failed to record permanent failure")
 				}
 			}
 		} else {
@@ -297,7 +319,76 @@ func (p *PublishProcessor) publishToTarget(
 	}
 
 	var mediaIDs []string
-	if input.MediaURL != nil && *input.MediaURL != "" {
+	if post.MediaID != nil && p.mediaRepo != nil && p.mediaStore != nil {
+		mediaRecord, err := p.mediaRepo.GetMediaByID(ctx, *post.MediaID)
+		if err != nil {
+			errMsg := fmt.Sprintf("persisted media not found: %s", *post.MediaID)
+			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "MEDIA_NOT_FOUND", errMsg)
+			return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
+		}
+		if mediaRecord.UploadStatus != "complete" {
+			errMsg := fmt.Sprintf("media upload incomplete: %s (status: %s)", *post.MediaID, mediaRecord.UploadStatus)
+			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "MEDIA_INCOMPLETE", errMsg)
+			return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
+		}
+
+		mediaReader, err := p.mediaStore.Get(ctx, mediaRecord.StorageKey)
+		if err != nil {
+			errMsg := fmt.Sprintf("failed to open media from storage: %s", mediaRecord.StorageKey)
+			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "MEDIA_STORAGE_ERROR", errMsg)
+			return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
+		}
+		defer mediaReader.Close()
+
+		tempFile, err := os.CreateTemp("", "upload-*.tmp")
+		if err != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("create temp file: %w", err)
+		}
+		defer os.Remove(tempFile.Name())
+		defer tempFile.Close()
+
+		if _, err := io.Copy(tempFile, mediaReader); err != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("copy media to temp file: %w", err)
+		}
+
+		if _, err := tempFile.Seek(0, 0); err != nil {
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return fmt.Errorf("seek temp file: %w", err)
+		}
+
+		mediaID, uploadErr := connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaRecord.ContentType)
+		if errors.Is(uploadErr, connectors.ErrAuthFailed) && !refreshed {
+			if _, seekErr := tempFile.Seek(0, 0); seekErr != nil {
+				return newPublishError(connectors.ErrorPermanent, fmt.Errorf("rewind media for auth retry: %w", seekErr))
+			}
+			var refreshErr error
+			accessToken, refreshed, refreshErr = p.refreshAccessToken(ctx, account, connector)
+			if refreshErr != nil {
+				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", refreshErr.Error())
+				return newPublishError(connectors.ClassifyError(refreshErr), refreshErr)
+			}
+			mediaID, uploadErr = connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaRecord.ContentType)
+		}
+		if uploadErr != nil {
+			if rateLimitErr, ok := extractRateLimitError(uploadErr); ok {
+				metrics.RateLimitEvent(rateLimitErr.Platform)
+			}
+			classification := publishClassification(uploadErr)
+			if classification == connectors.ErrorAmbiguous {
+				_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "UPLOAD_OUTCOME_UNKNOWN", uploadErr.Error())
+			} else if classification == connectors.ErrorPermanent {
+				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "UPLOAD_FAILED", uploadErr.Error())
+			}
+			return newPublishError(classification, fmt.Errorf("upload media to platform: %w", uploadErr))
+		}
+		mediaIDs = append(mediaIDs, mediaID)
+	} else if input.MediaURL != nil && *input.MediaURL != "" {
+		if strings.HasPrefix(*input.MediaURL, "blob:") {
+			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "INVALID_MEDIA_URL", "browser blob: URL cannot be used for remote publishing")
+			return newPublishError(connectors.ErrorPermanent, errors.New("browser blob: URL cannot be used for remote publishing"))
+		}
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, *input.MediaURL, nil)
 		if reqErr != nil {
 			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
@@ -305,7 +396,7 @@ func (p *PublishProcessor) publishToTarget(
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
-		resp, respErr := http.DefaultClient.Do(req)
+		resp, respErr := mediaDownloadClient.Do(req)
 		if respErr != nil {
 			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
 			return fmt.Errorf("download media: %w", respErr)
@@ -366,6 +457,14 @@ func (p *PublishProcessor) publishToTarget(
 			return newPublishError(classification, fmt.Errorf("upload media to platform: %w", uploadErr))
 		}
 		mediaIDs = append(mediaIDs, mediaID)
+	}
+
+	// Pre-publication prerequisite check: YouTube requires a video!
+	if account.Platform == "youtube" && len(mediaIDs) == 0 {
+		errMsg := "YouTube publishing requires a video"
+		_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "MEDIA_REQUIRED", errMsg)
+		contextLogger.Error().Str("event", "publish_failed").Str("status", "failed").Msg(errMsg)
+		return newPublishError(connectors.ErrorPermanent, connectors.NewClassifiedError(connectors.ErrorPermanent, "MEDIA_REQUIRED", errors.New(errMsg)))
 	}
 
 	publishStart := time.Now()
@@ -546,6 +645,13 @@ func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID u
 }
 
 func (p *PublishProcessor) recordPermanentFailure(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, attempt *model.PublicationAttempt, cause error) error {
+	if attempt == nil {
+		var getErr error
+		attempt, getErr = p.publications.GetPublicationAttempt(ctx, targetID)
+		if getErr != nil {
+			return getErr
+		}
+	}
 	_, account, err := p.publications.GetPostTargetWithSocialAccount(ctx, targetID)
 	if err != nil {
 		return fmt.Errorf("get failed target platform: %w", err)
@@ -555,8 +661,12 @@ func (p *PublishProcessor) recordPermanentFailure(ctx context.Context, postID, t
 	if id, ok := asynq.GetTaskID(ctx); ok && id != "" {
 		jobID = &id
 	}
+	taskType := "post:publish"
+	if task != nil {
+		taskType = task.Type()
+	}
 	contextLogger := logger.WithJobContext(getTaskID(ctx), postID.String(), "", account.Platform, attempt.AttemptCount)
-	if err := p.publications.RecordPermanentFailure(ctx, attempt.ID, postID, targetID, jobID, task.Type(), account.Platform, MaxAttempts, failureType, string(publishClassification(cause)), code, reason, response); err != nil {
+	if err := p.publications.RecordPermanentFailure(ctx, attempt.ID, postID, targetID, jobID, taskType, account.Platform, MaxAttempts, failureType, string(publishClassification(cause)), code, reason, response); err != nil {
 		contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_permanently_failed").Str("status", "permanent_failure").Int("max_attempts", MaxAttempts).Str("failure_type", failureType).Msg("failed to persist permanent publish failure")
 		return err
 	}

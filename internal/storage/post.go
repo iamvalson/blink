@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/iamvalson/blink/internal/model"
@@ -30,7 +31,7 @@ func NewPostRepository(db *pgxpool.Pool) *PostRepository {
 func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID uuid.UUID) (*model.PostWithDetails, error) {
 	var post model.PostWithDetails
 	err := r.db.QueryRow(ctx, `
-		SELECT id, user_id, caption, media_url, media_type, status, created_at, updated_at
+		SELECT id, user_id, caption, media_url, media_type, media_id, status, created_at, updated_at
 		FROM posts
 		WHERE id = $1 AND user_id = $2
 	`, postID, userID).Scan(
@@ -39,6 +40,7 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 		&post.Caption,
 		&post.MediaURL,
 		&post.MediaType,
+		&post.MediaID,
 		&post.Status,
 		&post.CreatedAt,
 		&post.UpdatedAt,
@@ -159,32 +161,79 @@ func (r *PostRepository) CreatePost(
 
 
 
-	// Validate all social accounts belongs to the user
-	for _, socialAccountID := range input.Targets{
-		var exists bool
-
+	// Validate all social accounts belong to the user and gather platforms
+	var targetPlatforms []string
+	for _, socialAccountID := range input.Targets {
+		var platform string
 		err := tx.QueryRow(
 			ctx,
 			`
-				SELECT EXISTS (
-					SELECT 1
-					FROM social_accounts
-					WHERE id = $1
-					AND user_id = $2
-				)
+				SELECT platform
+				FROM social_accounts
+				WHERE id = $1
+				AND user_id = $2
 			`,
 			socialAccountID,
 			userID,
-		).Scan(&exists)
-		if err != nil { 
-			return nil, fmt.Errorf("validate social account: %w", err) 
-		} 
-		if !exists { 
-			return nil, fmt.Errorf("social account %s not found", socialAccountID) 
+		).Scan(&platform)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("social account %s not found", socialAccountID)
+			}
+			return nil, fmt.Errorf("validate social account: %w", err)
+		}
+		targetPlatforms = append(targetPlatforms, platform)
+	}
+
+	// Validate media if referenced
+	var mediaContentType *string
+	if input.MediaID != nil {
+		var (
+			mediaUserID  uuid.UUID
+			mediaType    string
+			uploadStatus string
+		)
+		err := tx.QueryRow(
+			ctx,
+			`
+				SELECT user_id, content_type, upload_status
+				FROM media
+				WHERE id = $1
+			`,
+			*input.MediaID,
+		).Scan(&mediaUserID, &mediaType, &uploadStatus)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("media not found: %s", *input.MediaID)
+			}
+			return nil, fmt.Errorf("validate media: %w", err)
+		}
+		if mediaUserID != userID {
+			return nil, fmt.Errorf("media %s does not belong to user", *input.MediaID)
+		}
+		if uploadStatus != "complete" {
+			return nil, fmt.Errorf("media upload is not complete: %s (status: %s)", *input.MediaID, uploadStatus)
+		}
+		mediaContentType = &mediaType
+		if input.MediaType == nil {
+			input.MediaType = &mediaType
 		}
 	}
 
-
+	// Platform-specific validation
+	for _, p := range targetPlatforms {
+		if p == "youtube" {
+			if input.MediaID == nil && (input.MediaURL == nil || *input.MediaURL == "") {
+				return nil, errors.New("YouTube publishing requires a video")
+			}
+			if mediaContentType != nil && !strings .HasPrefix(*mediaContentType, "video/") {
+				return nil, errors.New("YouTube publishing requires a video")
+			}
+			if input.MediaType != nil && !strings.HasPrefix(*input.MediaType, "video/") {
+				return nil, errors.New("YouTube publishing requires a video")
+			}
+		}
+	}
 
 	// Create the post
 	var post model.Post
@@ -197,6 +246,7 @@ func (r *PostRepository) CreatePost(
 				caption,
 				media_url,
 				media_type,
+				media_id,
 				status
 			)
 			VALUES (
@@ -204,6 +254,7 @@ func (r *PostRepository) CreatePost(
 				$2,
 				$3,
 				$4,
+				$5,
 				'QUEUED'
 			)
 			RETURNING
@@ -212,6 +263,7 @@ func (r *PostRepository) CreatePost(
 				caption,
 				media_url,
 				media_type,
+				media_id,
 				status,
 				created_at,
 				updated_at
@@ -220,12 +272,14 @@ func (r *PostRepository) CreatePost(
 		input.Caption,
 		input.MediaURL,
 		input.MediaType,
+		input.MediaID,
 	).Scan(
 		&post.ID, 
 		&post.UserID, 
 		&post.Caption, 
 		&post.MediaURL, 
 		&post.MediaType, 
+		&post.MediaID,
 		&post.Status, 
 		&post.CreatedAt, 
 		&post.UpdatedAt, 
@@ -436,6 +490,7 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 					caption,
 					media_url,
 					media_type,
+					media_id,
 					status,
 					created_at,
 					updated_at
@@ -449,6 +504,7 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 			&post.Caption, 
 			&post.MediaURL, 
 			&post.MediaType, 
+			&post.MediaID,
 			&post.Status, 
 			&post.CreatedAt, 
 			&post.UpdatedAt,
@@ -466,15 +522,17 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 
 func hashCreatePostRequest(input model.CreatePostInput) (string, error){
 	data := struct {
-		Caption *string `json:"caption"` 
-		MediaURL *string `json:"media_url"` 
-		MediaType *string `json:"media_type"` 
-		Targets []uuid.UUID `json:"targets"`
+		Caption   *string     `json:"caption"` 
+		MediaURL  *string     `json:"media_url"` 
+		MediaType *string     `json:"media_type"` 
+		MediaID   *uuid.UUID  `json:"media_id,omitempty"`
+		Targets   []uuid.UUID `json:"targets"`
 	} {
-		Caption: input.Caption, 
-		MediaURL: input.MediaURL, 
+		Caption:   input.Caption, 
+		MediaURL:  input.MediaURL, 
 		MediaType: input.MediaType, 
-		Targets: input.Targets,
+		MediaID:   input.MediaID,
+		Targets:   input.Targets,
 	}
 
 	encoded, err := json.Marshal(data)
