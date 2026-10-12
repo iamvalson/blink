@@ -10,19 +10,17 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-
 const (
-	accessTokenTTL = 15 * time.Minute
-	issuer = "blink"
-	audience = "blink-api"
+	accessTokenTTL       = 15 * time.Minute
+	rememberedSessionTTL = 30 * 24 * time.Hour
+	issuer               = "blink"
+	audience             = "blink-api"
 )
-
 
 type JWTService struct {
 	privateKey ed25519.PrivateKey
 	publicKey  ed25519.PublicKey
 }
-
 
 func NewJWTService(
 	privateKey ed25519.PrivateKey,
@@ -30,47 +28,52 @@ func NewJWTService(
 ) *JWTService {
 	return &JWTService{
 		privateKey: privateKey,
-		publicKey: publicKey,
+		publicKey:  publicKey,
 	}
 }
-
 
 type Claims struct {
 	TokenType string `json:"token_type"`
 	jwt.RegisteredClaims
 }
 
-func (s *JWTService) CreateAccessToken(userID string) (string, error) {
+func AccessTokenLifetime(rememberMe bool) time.Duration {
+	if rememberMe {
+		return rememberedSessionTTL
+	}
+
+	return accessTokenTTL
+}
+
+func (s *JWTService) CreateAccessToken(userID string, rememberMe bool) (string, error) {
 	now := time.Now()
 
 	jti, err := generateJTI()
-	if err != nil{
+	if err != nil {
 		return "", fmt.Errorf("generate token ID: %w", err)
 	}
 
 	claims := Claims{
 		TokenType: "access",
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject: userID,
-			Issuer: issuer,
-			Audience: jwt.ClaimStrings{audience},
-			IssuedAt: jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(accessTokenTTL)),
-			ID:	jti,
+			Subject:   userID,
+			Issuer:    issuer,
+			Audience:  jwt.ClaimStrings{audience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(AccessTokenLifetime(rememberMe))),
+			ID:        jti,
 		},
 	}
-
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
 
 	signedToken, err := token.SignedString(s.privateKey)
-	if err != nil{
+	if err != nil {
 		return "", fmt.Errorf("sign access token: %w", err)
 	}
 
 	return signedToken, nil
 }
-
 
 func (s *JWTService) ValidateAccessToken(tokenString string) (string, error) {
 	var claims Claims
@@ -80,7 +83,7 @@ func (s *JWTService) ValidateAccessToken(tokenString string) (string, error) {
 		&claims,
 		func(t *jwt.Token) (any, error) {
 			if t.Method.Alg() != jwt.SigningMethodEdDSA.Alg() {
-				return nil,  fmt.Errorf("unexpected signing algorithm: %s", t.Method.Alg())
+				return nil, fmt.Errorf("unexpected signing algorithm: %s", t.Method.Alg())
 			}
 			return s.publicKey, nil
 		},
@@ -106,12 +109,10 @@ func (s *JWTService) ValidateAccessToken(tokenString string) (string, error) {
 	return claims.Subject, nil
 }
 
-
-
 func generateJTI() (string, error) {
 	b := make([]byte, 32)
 
-	if _, err := rand.Read(b); err != nil{
+	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 

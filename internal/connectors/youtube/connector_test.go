@@ -316,3 +316,48 @@ func TestConnector_GetStatus(t *testing.T) {
 		t.Errorf("expected publicURL %s, got %s", expectedURL, publicURL)
 	}
 }
+
+func TestConnector_Publish_MissingVideo_PermanentError(t *testing.T) {
+	conn := setupTestConnector(t, "http://dummy")
+	ctx := context.Background()
+
+	_, _, err := conn.Publish(ctx, "mock-token", "attempt-1", "Caption with no video")
+	if err == nil {
+		t.Fatal("expected error for missing video, got nil")
+	}
+
+	class := connectors.ClassifyError(err)
+	if class != connectors.ErrorPermanent {
+		t.Fatalf("expected ErrorPermanent for missing video, got %v", class)
+	}
+}
+
+func TestConnector_UploadMedia_NilMedia_PermanentError(t *testing.T) {
+	conn := setupTestConnector(t, "http://dummy")
+	ctx := context.Background()
+
+	_, err := conn.UploadMedia(ctx, "mock-token", "attempt-1", nil, "video/mp4")
+	if err == nil {
+		t.Fatal("expected error for nil media, got nil")
+	}
+
+	class := connectors.ClassifyError(err)
+	if class != connectors.ErrorPermanent {
+		t.Fatalf("expected ErrorPermanent for nil media, got %v", class)
+	}
+}
+
+func TestConnector_Publish_MissingToken_PermanentError(t *testing.T) {
+	conn := setupTestConnector(t, "http://dummy")
+	ctx := context.Background()
+
+	_, _, err := conn.Publish(ctx, "", "attempt-1", "Caption", "video-123")
+	if err == nil {
+		t.Fatal("expected error for missing token, got nil")
+	}
+
+	class := connectors.ClassifyError(err)
+	if class != connectors.ErrorPermanent {
+		t.Fatalf("expected ErrorPermanent for missing token, got %v", class)
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
 	applog "github.com/iamvalson/blink/internal/log"
+	"github.com/iamvalson/blink/internal/mediastore"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/iamvalson/blink/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -136,9 +137,17 @@ func run(ctx context.Context) error {
 
 	log.Info().Msg("Worker server initialized")
 
+	// Initialize media storage & repository
+	mediaStore, err := mediastore.InitStore(cfg)
+	if err != nil {
+		return fmt.Errorf("initialize media store: %w", err)
+	}
+	mediaRepo := storage.NewMediaRepository(db)
+
 	// Create and register handler
 	mux := asynq.NewServeMux()
-	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey, retryClient)
+	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey, retryClient).
+		WithMediaStore(mediaRepo, mediaStore)
 
 	mux.HandleFunc(jobs.TypePublishPost, processor.ProcessPublishJob)
 

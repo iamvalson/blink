@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/iamvalson/blink/internal/model"
@@ -26,11 +27,20 @@ func NewPostRepository(db *pgxpool.Pool) *PostRepository {
 	return &PostRepository{db: db}
 }
 
+// ListPostsFilter defines optional filters for listing a user's posts.
+type ListPostsFilter struct {
+	Status   string // e.g. "QUEUED", "PUBLISHED", "FAILED"; empty means all
+	Platform string // e.g. "youtube"; empty means all
+	Search   string // partial match against caption/title
+	Limit    int    // 0 means default (50)
+	Offset   int
+}
+
 // GetPostWithDetails retrieves a post and its publishing targets with attempt results
 func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID uuid.UUID) (*model.PostWithDetails, error) {
 	var post model.PostWithDetails
 	err := r.db.QueryRow(ctx, `
-		SELECT id, user_id, caption, media_url, media_type, status, created_at, updated_at
+		SELECT id, user_id, caption, media_url, media_type, media_id, status, content_format, created_at, updated_at
 		FROM posts
 		WHERE id = $1 AND user_id = $2
 	`, postID, userID).Scan(
@@ -39,7 +49,9 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 		&post.Caption,
 		&post.MediaURL,
 		&post.MediaType,
+		&post.MediaID,
 		&post.Status,
+		&post.ContentFormat,
 		&post.CreatedAt,
 		&post.UpdatedAt,
 	)
@@ -48,6 +60,13 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			return nil, ErrPostNotFound
 		}
 		return nil, fmt.Errorf("get post: %w", err)
+	}
+	if post.Caption != nil {
+		firstLine := strings.SplitN(*post.Caption, "\n", 2)[0]
+		firstLine = strings.TrimSpace(firstLine)
+		if firstLine != "" {
+			post.Title = &firstLine
+		}
 	}
 
 	rows, err := r.db.Query(ctx, `
@@ -97,6 +116,232 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 	return &post, nil
 }
 
+// ListPosts retrieves paginated posts for a user with optional filters.
+func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter ListPostsFilter) ([]model.PostWithDetails, int, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+
+	// Build WHERE clauses dynamically
+	conditions := []string{"p.user_id = $1"}
+	args := []interface{}{userID}
+	argIdx := 2
+
+	if filter.Status != "" {
+		conditions = append(conditions, fmt.Sprintf("p.status = $%d", argIdx))
+		args = append(args, filter.Status)
+		argIdx++
+	}
+	if filter.Platform != "" {
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM post_targets pt JOIN social_accounts sa ON sa.id = pt.social_account_id WHERE pt.post_id = p.id AND sa.platform = $%d)", argIdx))
+		args = append(args, filter.Platform)
+		argIdx++
+	}
+	if filter.Search != "" {
+		conditions = append(conditions, fmt.Sprintf("p.caption ILIKE $%d", argIdx))
+		args = append(args, "%"+filter.Search+"%")
+		argIdx++
+	}
+
+	where := strings.Join(conditions, " AND ")
+
+	// Count total
+	var total int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM posts p WHERE %s", where)
+	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count posts: %w", err)
+	}
+
+	// Fetch posts
+	listQuery := fmt.Sprintf(`
+		SELECT p.id, p.user_id, p.caption, p.media_url, p.media_type, p.media_id,
+		       p.status, p.content_format, p.created_at, p.updated_at
+		FROM posts p
+		WHERE %s
+		ORDER BY p.created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, where, argIdx, argIdx+1)
+	args = append(args, limit, filter.Offset)
+
+	rows, err := r.db.Query(ctx, listQuery, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list posts: %w", err)
+	}
+	defer rows.Close()
+
+	var posts []model.PostWithDetails
+	for rows.Next() {
+		var p model.PostWithDetails
+		if err := rows.Scan(
+			&p.ID, &p.UserID, &p.Caption, &p.MediaURL, &p.MediaType, &p.MediaID,
+			&p.Status, &p.ContentFormat, &p.CreatedAt, &p.UpdatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan post: %w", err)
+		}
+		if p.Caption != nil {
+			firstLine := strings.SplitN(*p.Caption, "\n", 2)[0]
+			firstLine = strings.TrimSpace(firstLine)
+			if firstLine != "" {
+				p.Title = &firstLine
+			}
+		}
+		posts = append(posts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate posts: %w", err)
+	}
+
+	// Fetch targets for all posts in one query
+	if len(posts) > 0 {
+		postIDs := make([]uuid.UUID, len(posts))
+		for i, p := range posts {
+			postIDs[i] = p.ID
+		}
+		targetRows, err := r.db.Query(ctx, `
+			SELECT
+				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
+				pt.status, pa.platform_post_id, pa.platform_url, pa.error_code,
+				pa.error_message, pa.completed_at
+			FROM post_targets pt
+			JOIN social_accounts sa ON sa.id = pt.social_account_id
+			LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
+			WHERE pt.post_id = ANY($1)
+			ORDER BY pt.post_id, pt.created_at ASC
+		`, postIDs)
+		if err != nil {
+			return nil, 0, fmt.Errorf("list post targets: %w", err)
+		}
+		defer targetRows.Close()
+
+		// index posts by ID for O(1) assignment
+		postIndex := make(map[uuid.UUID]*model.PostWithDetails, len(posts))
+		for i := range posts {
+			posts[i].Targets = make([]model.PostTargetDetail, 0)
+			postIndex[posts[i].ID] = &posts[i]
+		}
+
+		for targetRows.Next() {
+			var postID uuid.UUID
+			var t model.PostTargetDetail
+			if err := targetRows.Scan(
+				&t.ID, &postID, &t.SocialAccountID, &t.Platform, &t.PlatformUserID,
+				&t.Status, &t.PlatformPostID, &t.PlatformURL, &t.ErrorCode,
+				&t.ErrorMessage, &t.PublishedAt,
+			); err != nil {
+				return nil, 0, fmt.Errorf("scan list target: %w", err)
+			}
+			if p, ok := postIndex[postID]; ok {
+				p.Targets = append(p.Targets, t)
+			}
+		}
+		if err := targetRows.Err(); err != nil {
+			return nil, 0, fmt.Errorf("iterate targets: %w", err)
+		}
+	}
+
+	return posts, total, nil
+}
+
+var ErrPostDeleteForbidden = errors.New("post cannot be deleted while publishing is in progress")
+
+// DeletePost deletes a post and its associated records.
+// Posts in QUEUED or PUBLISHING status cannot be deleted to avoid racing with active workers.
+func (r *PostRepository) DeletePost(ctx context.Context, userID, postID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Verify ownership and check status
+	var status string
+	err = tx.QueryRow(ctx,
+		`SELECT status FROM posts WHERE id = $1 AND user_id = $2`,
+		postID, userID,
+	).Scan(&status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrPostNotFound
+		}
+		return fmt.Errorf("get post status: %w", err)
+	}
+
+	if status == "QUEUED" || status == "PUBLISHING" {
+		return ErrPostDeleteForbidden
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM posts WHERE id = $1`, postID); err != nil {
+		return fmt.Errorf("delete post: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// RetryPost requeues a failed post for publishing by resetting target/attempt state.
+// Only FAILED posts can be retried.
+func (r *PostRepository) RetryPost(ctx context.Context, userID, postID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var status string
+	err = tx.QueryRow(ctx,
+		`SELECT status FROM posts WHERE id = $1 AND user_id = $2`,
+		postID, userID,
+	).Scan(&status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrPostNotFound
+		}
+		return fmt.Errorf("get post status: %w", err)
+	}
+	if status != "FAILED" {
+		return fmt.Errorf("only FAILED posts can be retried (current status: %s)", status)
+	}
+
+	// Reset post to QUEUED
+	if _, err := tx.Exec(ctx,
+		`UPDATE posts SET status = 'QUEUED', updated_at = NOW() WHERE id = $1`,
+		postID,
+	); err != nil {
+		return fmt.Errorf("reset post status: %w", err)
+	}
+
+	// Reset failed targets to PENDING
+	if _, err := tx.Exec(ctx,
+		`UPDATE post_targets SET status = 'PENDING', updated_at = NOW() WHERE post_id = $1 AND status = 'FAILED'`,
+		postID,
+	); err != nil {
+		return fmt.Errorf("reset targets: %w", err)
+	}
+
+	// Reset failed publication attempts to PENDING
+	if _, err := tx.Exec(ctx, `
+		UPDATE publication_attempts pa
+		SET status = 'PENDING', error_code = NULL, error_message = NULL, error_class = NULL,
+		    next_retry_at = NULL, updated_at = NOW()
+		FROM post_targets pt
+		WHERE pa.post_target_id = pt.id
+		  AND pt.post_id = $1
+		  AND pa.status IN ('FAILED', 'UNKNOWN')
+	`, postID); err != nil {
+		return fmt.Errorf("reset attempts: %w", err)
+	}
+
+	// Re-insert outbox event for the post to trigger the worker
+	payload, _ := json.Marshal(map[string]interface{}{"post_id": postID})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status)
+		VALUES ('post', $1, 'POST_CREATED', $2, 'PENDING')
+	`, postID, payload); err != nil {
+		return fmt.Errorf("insert retry outbox event: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
 
 
 // CreatePost creates a post, its targets, publication attempts, idempotency record and outbox event in one transaction
@@ -159,32 +404,119 @@ func (r *PostRepository) CreatePost(
 
 
 
-	// Validate all social accounts belongs to the user
-	for _, socialAccountID := range input.Targets{
-		var exists bool
-
+	// Validate all social accounts belong to the user and gather platforms
+	var targetPlatforms []string
+	for _, socialAccountID := range input.Targets {
+		var platform string
 		err := tx.QueryRow(
 			ctx,
 			`
-				SELECT EXISTS (
-					SELECT 1
-					FROM social_accounts
-					WHERE id = $1
-					AND user_id = $2
-				)
+				SELECT platform
+				FROM social_accounts
+				WHERE id = $1
+				AND user_id = $2
 			`,
 			socialAccountID,
 			userID,
-		).Scan(&exists)
-		if err != nil { 
-			return nil, fmt.Errorf("validate social account: %w", err) 
-		} 
-		if !exists { 
-			return nil, fmt.Errorf("social account %s not found", socialAccountID) 
+		).Scan(&platform)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("social account %s not found", socialAccountID)
+			}
+			return nil, fmt.Errorf("validate social account: %w", err)
+		}
+		targetPlatforms = append(targetPlatforms, platform)
+	}
+
+	// Reject blob: URLs and unauthenticated remote URLs
+	if input.MediaURL != nil && *input.MediaURL != "" {
+		if strings.HasPrefix(*input.MediaURL, "blob:") {
+			return nil, errors.New("browser blob: URLs cannot be used for post creation")
+		}
+		if input.MediaID == nil && len(input.MediaIDs) == 0 {
+			return nil, errors.New("remote media URLs without durable media records are not permitted")
 		}
 	}
 
+	// Validate media if referenced
+	var mediaContentType *string
+	mediaIDsToCheck := input.MediaIDs
+	if len(mediaIDsToCheck) == 0 && input.MediaID != nil {
+		mediaIDsToCheck = []uuid.UUID{*input.MediaID}
+	}
 
+	for _, mID := range mediaIDsToCheck {
+		var (
+			mediaUserID  uuid.UUID
+			mediaType    string
+			uploadStatus string
+		)
+		err := tx.QueryRow(
+			ctx,
+			`
+				SELECT user_id, content_type, upload_status
+				FROM media
+				WHERE id = $1
+			`,
+			mID,
+		).Scan(&mediaUserID, &mediaType, &uploadStatus)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("media not found: %s", mID)
+			}
+			return nil, fmt.Errorf("validate media: %w", err)
+		}
+		if mediaUserID != userID {
+			return nil, fmt.Errorf("media %s does not belong to user", mID)
+		}
+		if uploadStatus != "complete" {
+			return nil, fmt.Errorf("media upload is not complete: %s (status: %s)", mID, uploadStatus)
+		}
+		mediaContentType = &mediaType
+		if input.MediaType == nil {
+			input.MediaType = &mediaType
+		}
+		if input.MediaID == nil {
+			input.MediaID = &mID
+		}
+	}
+
+	// Validate and normalise content_format before platform checks
+	requestedFormat := input.ContentFormat
+	if requestedFormat == "" {
+		requestedFormat = model.ContentFormatVideo
+	}
+	switch requestedFormat {
+	case model.ContentFormatVideo, model.ContentFormatShort:
+		// valid
+	default:
+		return nil, fmt.Errorf("invalid content_format: %s", requestedFormat)
+	}
+
+	// Platform-specific validation
+	for _, p := range targetPlatforms {
+		if p == "youtube" {
+			if input.MediaID == nil {
+				return nil, errors.New("YouTube publishing requires a video")
+			}
+			if mediaContentType != nil && !strings.HasPrefix(*mediaContentType, "video/") {
+				return nil, errors.New("YouTube publishing requires a video")
+			}
+			if input.MediaType != nil && !strings.HasPrefix(*input.MediaType, "video/") {
+				return nil, errors.New("YouTube publishing requires a video")
+			}
+		} else if p == "twitter" {
+			if mediaContentType != nil {
+				ct := *mediaContentType
+				if !strings.HasPrefix(ct, "image/") && !strings.HasPrefix(ct, "video/") {
+					return nil, fmt.Errorf("unsupported media type for Twitter/X: %s", ct)
+				}
+			}
+		}
+	}
+
+	// requestedFormat has already been validated and defaulted above.
+	contentFormat := requestedFormat
 
 	// Create the post
 	var post model.Post
@@ -197,14 +529,18 @@ func (r *PostRepository) CreatePost(
 				caption,
 				media_url,
 				media_type,
-				status
+				media_id,
+				status,
+				content_format
 			)
 			VALUES (
 				$1,
 				$2,
 				$3,
 				$4,
-				'QUEUED'
+				$5,
+				'QUEUED',
+				$6
 			)
 			RETURNING
 				id,
@@ -212,7 +548,9 @@ func (r *PostRepository) CreatePost(
 				caption,
 				media_url,
 				media_type,
+				media_id,
 				status,
+				content_format,
 				created_at,
 				updated_at
 		`,
@@ -220,18 +558,22 @@ func (r *PostRepository) CreatePost(
 		input.Caption,
 		input.MediaURL,
 		input.MediaType,
+		input.MediaID,
+		contentFormat,
 	).Scan(
-		&post.ID, 
-		&post.UserID, 
-		&post.Caption, 
-		&post.MediaURL, 
-		&post.MediaType, 
-		&post.Status, 
-		&post.CreatedAt, 
-		&post.UpdatedAt, 
-	) 
-	if err != nil { 
-		return nil, fmt.Errorf("create post: %w", err) 
+		&post.ID,
+		&post.UserID,
+		&post.Caption,
+		&post.MediaURL,
+		&post.MediaType,
+		&post.MediaID,
+		&post.Status,
+		&post.ContentFormat,
+		&post.CreatedAt,
+		&post.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create post: %w", err)
 	}
 
 
@@ -436,7 +778,9 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 					caption,
 					media_url,
 					media_type,
+					media_id,
 					status,
+					content_format,
 					created_at,
 					updated_at
 				FROM posts
@@ -444,19 +788,21 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 			`,
 			*record.ResourceID,
 		).Scan(
-			&post.ID, 
-			&post.UserID, 
-			&post.Caption, 
-			&post.MediaURL, 
-			&post.MediaType, 
-			&post.Status, 
-			&post.CreatedAt, 
+			&post.ID,
+			&post.UserID,
+			&post.Caption,
+			&post.MediaURL,
+			&post.MediaType,
+			&post.MediaID,
+			&post.Status,
+			&post.ContentFormat,
+			&post.CreatedAt,
 			&post.UpdatedAt,
 		)
 
-		if err != nil { 
-			return nil, fmt.Errorf("get idempotent post: %w", err) 
-		} 
+		if err != nil {
+			return nil, fmt.Errorf("get idempotent post: %w", err)
+		}
 		return &post, nil
 	}
 
@@ -464,17 +810,23 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 }
 
 
-func hashCreatePostRequest(input model.CreatePostInput) (string, error){
+func hashCreatePostRequest(input model.CreatePostInput) (string, error) {
 	data := struct {
-		Caption *string `json:"caption"` 
-		MediaURL *string `json:"media_url"` 
-		MediaType *string `json:"media_type"` 
-		Targets []uuid.UUID `json:"targets"`
+		Caption       *string     `json:"caption"`
+		MediaURL      *string     `json:"media_url"`
+		MediaType     *string     `json:"media_type"`
+		MediaID       *uuid.UUID  `json:"media_id,omitempty"`
+		MediaIDs      []uuid.UUID `json:"media_ids,omitempty"`
+		Targets       []uuid.UUID `json:"targets"`
+		ContentFormat string      `json:"content_format"`
 	} {
-		Caption: input.Caption, 
-		MediaURL: input.MediaURL, 
-		MediaType: input.MediaType, 
-		Targets: input.Targets,
+		Caption:       input.Caption,
+		MediaURL:      input.MediaURL,
+		MediaType:     input.MediaType,
+		MediaID:       input.MediaID,
+		MediaIDs:      input.MediaIDs,
+		Targets:       input.Targets,
+		ContentFormat: input.ContentFormat,
 	}
 
 	encoded, err := json.Marshal(data)

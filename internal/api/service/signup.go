@@ -90,7 +90,7 @@ func (s *SignupService) Signup(
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 
-	accessToken, err := s.jwt.CreateAccessToken(userID)
+	accessToken, err := s.jwt.CreateAccessToken(userID, false)
 	if err != nil {
 		return nil, fmt.Errorf("create access token: %w", err)
 	}

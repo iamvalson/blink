@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/storage"
@@ -25,13 +26,15 @@ func NewLoginService(users *storage.UserRepository, jwt *auth.JWTService) *Login
 }
 
 type LoginInput struct {
-	Email    string
-	Password string
+	Email      string
+	Password   string
+	RememberMe bool
 }
 
 type LoginResult struct {
-	UserID      string
-	AccessToken string
+	UserID          string
+	AccessToken     string
+	SessionDuration time.Duration
 }
 
 func (l *LoginService) Login(
@@ -65,13 +68,14 @@ func (l *LoginService) Login(
 	}
 
 	// Generate JWT
-	accessToken, err := l.jwt.CreateAccessToken(user.ID)
+	accessToken, err := l.jwt.CreateAccessToken(user.ID, input.RememberMe)
 	if err != nil {
 		return nil, fmt.Errorf("create access token: %w", err)
 	}
 
 	return &LoginResult{
-		UserID:      user.ID,
-		AccessToken: accessToken,
+		UserID:          user.ID,
+		AccessToken:     accessToken,
+		SessionDuration: auth.AccessTokenLifetime(input.RememberMe),
 	}, nil
 }

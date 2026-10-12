@@ -64,9 +64,11 @@ type OutboxEvent struct {
 }
 
 type PublishInput struct {
-	Caption   string
-	MediaURL  *string
-	MediaType *string
+	Caption       string
+	Title         *string
+	MediaURL      *string
+	MediaType     *string
+	ContentFormat string
 }
 
 type PublishResult struct {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +15,20 @@ import (
 	"github.com/iamvalson/blink/internal/connectors"
 	"golang.org/x/oauth2"
 )
+
+var defaultYouTubeTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          100,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   15 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+	ResponseHeaderTimeout: 120 * time.Second,
+}
 
 type Connector struct {
 	oauthConfig *oauth2.Config
@@ -25,10 +40,16 @@ type Connector struct {
 var _ connectors.OAuthConnector = (*Connector)(nil)
 
 // New creates a new Youtube connector
-func New(cfg YouTubeConfig) *Connector {
+func New(cfg YouTubeConfig, client ...*http.Client) *Connector {
+	hc := &http.Client{
+		Transport: defaultYouTubeTransport,
+	}
+	if len(client) > 0 && client[0] != nil {
+		hc = client[0]
+	}
 	return &Connector{
 		oauthConfig: NewOAuthConfig(cfg),
-		httpClient:  http.DefaultClient,
+		httpClient:  hc,
 		baseURL:     "https://www.googleapis.com/youtube/v3",
 	}
 }
@@ -92,25 +113,44 @@ func (c *Connector) UploadMedia(
 	mediaType string,
 ) (string, error) {
 	if token == "" {
-		return "", fmt.Errorf("no access token set")
+		return "", connectors.NewClassifiedError(
+			connectors.ErrorPermanent,
+			"AUTH_REQUIRED",
+			fmt.Errorf("no access token set"),
+		)
 	}
 
-	if mediaType != "video/mp4" {
-		return "", fmt.Errorf(
-			"unsupported YouTube media type: %s",
-			mediaType,
+	if media == nil {
+		return "", connectors.NewClassifiedError(
+			connectors.ErrorPermanent,
+			"MEDIA_REQUIRED",
+			fmt.Errorf("YouTube upload requires a video stream"),
+		)
+	}
+
+	if mediaType != "video/mp4" && !strings.HasPrefix(mediaType, "video/") {
+		return "", connectors.NewClassifiedError(
+			connectors.ErrorPermanent,
+			"UNSUPPORTED_MEDIA_TYPE",
+			fmt.Errorf("unsupported YouTube media type: %s", mediaType),
 		)
 	}
 
 	baseURL := strings.Replace(c.baseURL, "/youtube/v3", "", 1)
 	initURL := fmt.Sprintf("%s/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", baseURL)
 
-	// Tag the video with the attempt ID for crash reconciliation
+	// Tag the video with the attempt ID for crash reconciliation.
+	// Keep the video private during upload so the placeholder "Uploading..."
+	// title is never publicly visible. The Publish step will update the
+	// metadata and flip it to public once the real caption is applied.
 	attemptTag := fmt.Sprintf("blink_attempt_%s", attemptID)
 	dummyMeta := map[string]interface{}{
 		"snippet": map[string]interface{}{
 			"title": "Uploading...",
 			"tags":  []string{attemptTag},
+		},
+		"status": map[string]interface{}{
+			"privacyStatus": "private",
 		},
 	}
 	metaBody, _ := json.Marshal(dummyMeta)
@@ -182,20 +222,28 @@ func (c *Connector) Publish(
 	mediaIDs ...string,
 ) (string, string, error) {
 	if token == "" {
-		return "", "", fmt.Errorf("no access token set")
+		return "", "", connectors.NewClassifiedError(
+			connectors.ErrorPermanent,
+			"AUTH_REQUIRED",
+			fmt.Errorf("no access token set"),
+		)
 	}
 
-	if len(mediaIDs) == 0 {
-		return "", "", fmt.Errorf(
-			"YouTube publishing requires a video",
+	if len(mediaIDs) == 0 || mediaIDs[0] == "" {
+		return "", "", connectors.NewClassifiedError(
+			connectors.ErrorPermanent,
+			"MEDIA_REQUIRED",
+			fmt.Errorf("YouTube publishing requires a video"),
 		)
 	}
 
 	videoID := mediaIDs[0]
 
 	parts := strings.SplitN(caption, "\n", 2)
-	title := parts[0]
-	if len(title) > 100 {
+	title := strings.TrimSpace(parts[0])
+	if title == "" {
+		title = "Untitled Video"
+	} else if len(title) > 100 {
 		title = title[:97] + "..."
 	}
 
@@ -419,11 +467,18 @@ func (c *Connector) ReconcilePublish(
 		return connectors.ReconciliationResult{}, fmt.Errorf("no access token set")
 	}
 
+	if attemptID == "" {
+		return connectors.ReconciliationResult{Outcome: connectors.ReconciliationUnknown}, nil
+	}
+
+	searchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	attemptTag := fmt.Sprintf("blink_attempt_%s", attemptID)
 
 	// Query the YouTube search API for the tag among the user's own videos
 	searchURL := fmt.Sprintf("%s/search?part=snippet&forMine=true&q=%s&type=video&maxResults=5", c.baseURL, url.QueryEscape(attemptTag))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	req, err := http.NewRequestWithContext(searchCtx, http.MethodGet, searchURL, nil)
 	if err != nil {
 		return connectors.ReconciliationResult{}, fmt.Errorf("failed to create search request: %w", err)
 	}

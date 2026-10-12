@@ -1,4 +1,5 @@
-const page = () => {
-  return <div>page</div>;
-};
-export default page;
+import { SignupForm } from "@/features/auth/components/signup-form";
+
+export default function SignupPage() {
+  return <SignupForm />;
+}
