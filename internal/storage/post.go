@@ -1038,7 +1038,6 @@ func (r *PostRepository) ListCalendarPosts(ctx context.Context, userID uuid.UUID
 	if platform != "" {
 		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM post_targets pt JOIN social_accounts sa ON sa.id = pt.social_account_id WHERE pt.post_id = p.id AND sa.platform = $%d)", argIdx))
 		args = append(args, platform)
-		argIdx++
 	}
 
 	where := strings.Join(conditions, " AND ")
