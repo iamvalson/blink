@@ -138,7 +138,7 @@ func run(ctx context.Context) error {
 	log.Info().Msg("Worker server initialized")
 
 	// Initialize media storage & repository
-	localMediaStore, err := mediastore.NewLocalStore(cfg.MediaStoragePath)
+	mediaStore, err := mediastore.InitStore(cfg)
 	if err != nil {
 		return fmt.Errorf("initialize media store: %w", err)
 	}
@@ -147,7 +147,7 @@ func run(ctx context.Context) error {
 	// Create and register handler
 	mux := asynq.NewServeMux()
 	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey, retryClient).
-		WithMediaStore(mediaRepo, localMediaStore)
+		WithMediaStore(mediaRepo, mediaStore)
 
 	mux.HandleFunc(jobs.TypePublishPost, processor.ProcessPublishJob)
 
