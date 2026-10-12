@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +15,20 @@ import (
 	"github.com/iamvalson/blink/internal/connectors"
 	"golang.org/x/oauth2"
 )
+
+var defaultYouTubeTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          100,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   15 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+	ResponseHeaderTimeout: 120 * time.Second,
+}
 
 type Connector struct {
 	oauthConfig *oauth2.Config
@@ -26,7 +41,9 @@ var _ connectors.OAuthConnector = (*Connector)(nil)
 
 // New creates a new Youtube connector
 func New(cfg YouTubeConfig, client ...*http.Client) *Connector {
-	hc := &http.Client{Timeout: 60 * time.Second}
+	hc := &http.Client{
+		Transport: defaultYouTubeTransport,
+	}
 	if len(client) > 0 && client[0] != nil {
 		hc = client[0]
 	}
@@ -122,12 +139,18 @@ func (c *Connector) UploadMedia(
 	baseURL := strings.Replace(c.baseURL, "/youtube/v3", "", 1)
 	initURL := fmt.Sprintf("%s/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", baseURL)
 
-	// Tag the video with the attempt ID for crash reconciliation
+	// Tag the video with the attempt ID for crash reconciliation.
+	// Keep the video private during upload so the placeholder "Uploading..."
+	// title is never publicly visible. The Publish step will update the
+	// metadata and flip it to public once the real caption is applied.
 	attemptTag := fmt.Sprintf("blink_attempt_%s", attemptID)
 	dummyMeta := map[string]interface{}{
 		"snippet": map[string]interface{}{
 			"title": "Uploading...",
 			"tags":  []string{attemptTag},
+		},
+		"status": map[string]interface{}{
+			"privacyStatus": "private",
 		},
 	}
 	metaBody, _ := json.Marshal(dummyMeta)

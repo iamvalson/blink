@@ -19,6 +19,7 @@ import (
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/jobs"
 	logger "github.com/iamvalson/blink/internal/log"
+	"github.com/iamvalson/blink/internal/mediastore"
 	"github.com/iamvalson/blink/internal/metrics"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
@@ -313,9 +314,10 @@ func (p *PublishProcessor) publishToTarget(
 	}
 
 	input := model.PublishInput{
-		Caption:   caption,
-		MediaURL:  post.MediaURL,
-		MediaType: post.MediaType,
+		Caption:       caption,
+		MediaURL:      post.MediaURL,
+		MediaType:     post.MediaType,
+		ContentFormat: post.ContentFormat,
 	}
 
 	var mediaIDs []string
@@ -334,9 +336,14 @@ func (p *PublishProcessor) publishToTarget(
 
 		mediaReader, err := p.mediaStore.Get(ctx, mediaRecord.StorageKey)
 		if err != nil {
-			errMsg := fmt.Sprintf("failed to open media from storage: %s", mediaRecord.StorageKey)
-			_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "MEDIA_STORAGE_ERROR", errMsg)
-			return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
+			if errors.Is(err, mediastore.ErrNotFound) {
+				errMsg := fmt.Sprintf("persisted media not found in storage: %s", mediaRecord.StorageKey)
+				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "MEDIA_NOT_FOUND", errMsg)
+				return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
+			}
+			errMsg := fmt.Sprintf("storage error reading media %s: %v", mediaRecord.StorageKey, err)
+			_ = p.publications.ResetAttemptForRetry(ctx, attempt.ID)
+			return newPublishError(connectors.ErrorRetryable, errors.New(errMsg))
 		}
 		defer mediaReader.Close()
 
