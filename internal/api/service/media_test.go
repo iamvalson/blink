@@ -7,16 +7,19 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/iamvalson/blink/internal/api/service"
-	"github.com/iamvalson/blink/internal/model"
+	"github.com/iamvalson/blink/internal/mediastore"
 )
 
 type mockMediaStore struct {
-	putFunc    func(ctx context.Context, key string, r io.Reader, contentType string) (int64, error)
-	getFunc    func(ctx context.Context, key string) (io.ReadCloser, error)
-	deleteFunc func(ctx context.Context, key string) error
+	putFunc        func(ctx context.Context, key string, r io.Reader, contentType string) (int64, error)
+	getFunc        func(ctx context.Context, key string) (io.ReadCloser, error)
+	deleteFunc     func(ctx context.Context, key string) error
+	headFunc       func(ctx context.Context, key string) (*mediastore.ObjectInfo, error)
+	presignPutFunc func(ctx context.Context, key string, contentType string, size int64, ttl time.Duration) (*mediastore.PresignedUpload, error)
 }
 
 func (m *mockMediaStore) Put(ctx context.Context, key string, r io.Reader, contentType string) (int64, error) {
@@ -40,55 +43,27 @@ func (m *mockMediaStore) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-type mockMediaRepo struct {
-	createPendingFunc func(ctx context.Context, userID uuid.UUID, storageKey, originalFilename, contentType string, fileSize int64) (*model.Media, error)
-	markCompleteFunc  func(ctx context.Context, id uuid.UUID, fileSize int64) error
-	markFailedFunc    func(ctx context.Context, id uuid.UUID) error
-	getMediaFunc      func(ctx context.Context, id, userID uuid.UUID) (*model.Media, error)
-	getMediaByIDFunc  func(ctx context.Context, id uuid.UUID) (*model.Media, error)
-}
-
-func (r *mockMediaRepo) CreatePendingMedia(ctx context.Context, userID uuid.UUID, storageKey, originalFilename, contentType string, fileSize int64) (*model.Media, error) {
-	if r.createPendingFunc != nil {
-		return r.createPendingFunc(ctx, userID, storageKey, originalFilename, contentType, fileSize)
+func (m *mockMediaStore) Head(ctx context.Context, key string) (*mediastore.ObjectInfo, error) {
+	if m.headFunc != nil {
+		return m.headFunc(ctx, key)
 	}
-	return &model.Media{
-		ID:               uuid.New(),
-		UserID:           userID,
-		StorageKey:       storageKey,
-		OriginalFilename: originalFilename,
-		ContentType:      contentType,
-		FileSize:         fileSize,
-		UploadStatus:     "pending",
+	return &mediastore.ObjectInfo{
+		Key:         key,
+		Size:        1024,
+		ContentType: "video/mp4",
 	}, nil
 }
 
-func (r *mockMediaRepo) MarkComplete(ctx context.Context, id uuid.UUID, fileSize int64) error {
-	if r.markCompleteFunc != nil {
-		return r.markCompleteFunc(ctx, id, fileSize)
+func (m *mockMediaStore) PresignPut(ctx context.Context, key string, contentType string, size int64, ttl time.Duration) (*mediastore.PresignedUpload, error) {
+	if m.presignPutFunc != nil {
+		return m.presignPutFunc(ctx, key, contentType, size, ttl)
 	}
-	return nil
-}
-
-func (r *mockMediaRepo) MarkFailed(ctx context.Context, id uuid.UUID) error {
-	if r.markFailedFunc != nil {
-		return r.markFailedFunc(ctx, id)
-	}
-	return nil
-}
-
-func (r *mockMediaRepo) GetMedia(ctx context.Context, id, userID uuid.UUID) (*model.Media, error) {
-	if r.getMediaFunc != nil {
-		return r.getMediaFunc(ctx, id, userID)
-	}
-	return &model.Media{ID: id, UserID: userID, UploadStatus: "complete"}, nil
-}
-
-func (r *mockMediaRepo) GetMediaByID(ctx context.Context, id uuid.UUID) (*model.Media, error) {
-	if r.getMediaByIDFunc != nil {
-		return r.getMediaByIDFunc(ctx, id)
-	}
-	return &model.Media{ID: id, UploadStatus: "complete"}, nil
+	return &mediastore.PresignedUpload{
+		URL:       "https://r2.cloudflarestorage.com/mock-upload",
+		Method:    "PUT",
+		Headers:   map[string]string{"Content-Type": contentType},
+		ExpiresAt: time.Now().Add(ttl),
+	}, nil
 }
 
 // Test MediaService validation rules
@@ -152,27 +127,55 @@ func TestMediaService_Validation(t *testing.T) {
 	})
 }
 
-// Test MediaService storage failure
-func TestMediaService_StorageFailure(t *testing.T) {
-	storeErr := errors.New("disk full")
-	store := &mockMediaStore{
-		putFunc: func(ctx context.Context, key string, r io.Reader, contentType string) (int64, error) {
-			return 0, storeErr
-		},
-	}
-	markedFailed := false
-	repo := &mockMediaRepo{
-		markFailedFunc: func(ctx context.Context, id uuid.UUID) error {
-			markedFailed = true
-			return nil
-		},
-	}
+func TestMediaService_InitiateUploadValidation(t *testing.T) {
+	svc := service.NewMediaService(nil, nil)
+	userID := uuid.New()
 
-	// We pass our repo into MediaService through a repository wrapper
-	// Since service.NewMediaService expects *storage.MediaRepository,
-	// let's verify via unit tests that the service interacts properly with Store.
-	_ = store
-	_ = markedFailed
-	_ = repo
+	t.Run("unauthenticated", func(t *testing.T) {
+		_, err := svc.InitiateUpload(context.Background(), service.InitiateUploadInput{
+			UserID:      uuid.Nil,
+			Filename:    "video.mp4",
+			ContentType: "video/mp4",
+			Size:        1000,
+		})
+		if !errors.Is(err, service.ErrMediaUnauthorized) {
+			t.Fatalf("expected ErrMediaUnauthorized, got %v", err)
+		}
+	})
+
+	t.Run("unsupported content type", func(t *testing.T) {
+		_, err := svc.InitiateUpload(context.Background(), service.InitiateUploadInput{
+			UserID:      userID,
+			Filename:    "doc.pdf",
+			ContentType: "application/pdf",
+			Size:        1000,
+		})
+		if !errors.Is(err, service.ErrUnsupportedMediaType) {
+			t.Fatalf("expected ErrUnsupportedMediaType, got %v", err)
+		}
+	})
+
+	t.Run("zero size file", func(t *testing.T) {
+		_, err := svc.InitiateUpload(context.Background(), service.InitiateUploadInput{
+			UserID:      userID,
+			Filename:    "video.mp4",
+			ContentType: "video/mp4",
+			Size:        0,
+		})
+		if !errors.Is(err, service.ErrEmptyFile) {
+			t.Fatalf("expected ErrEmptyFile, got %v", err)
+		}
+	})
+
+	t.Run("oversized file", func(t *testing.T) {
+		_, err := svc.InitiateUpload(context.Background(), service.InitiateUploadInput{
+			UserID:      userID,
+			Filename:    "video.mp4",
+			ContentType: "video/mp4",
+			Size:        service.MaxVideoSize + 1,
+		})
+		if !errors.Is(err, service.ErrFileTooLarge) {
+			t.Fatalf("expected ErrFileTooLarge, got %v", err)
+		}
+	})
 }
-

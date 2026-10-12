@@ -144,12 +144,16 @@ func run(ctx context.Context) error {
 	zlog.Info().Msg("Outbox dispatcher started")
 
 	// Media Storage & Service
-	localMediaStore, err := mediastore.NewLocalStore(cfg.MediaStoragePath)
+	mediaStore, err := mediastore.InitStore(cfg)
 	if err != nil {
 		return fmt.Errorf("initialize media store: %w", err)
 	}
 	mediaRepo := storage.NewMediaRepository(db)
-	mediaService := service.NewMediaService(mediaRepo, localMediaStore)
+	mediaService := service.NewMediaService(mediaRepo, mediaStore, service.MediaConfig{
+		StorageProvider: cfg.MediaStorageDriver,
+		MaxUploadBytes:  cfg.MediaMaxUploadBytes,
+		PresignTTL:      time.Duration(cfg.MediaPresignedURLTTLSeconds) * time.Second,
+	})
 	mediaHandler := handler.NewMediaHandler(mediaService)
 
 	// Router Setup

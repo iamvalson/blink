@@ -118,8 +118,23 @@ func NewRouter(
 	// Media routes
 	if len(mediaHandlers) > 0 && mediaHandlers[0] != nil {
 		mh := mediaHandlers[0]
+
+		// Legacy / direct multipart uploads
 		r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/media", mh.Upload)
 		r.With(middleware.RequireAuth(jwtService)).Post("/api/media", mh.Upload)
+
+		// Presigned upload workflow
+		r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/media/uploads", mh.InitiateUpload)
+		r.With(middleware.RequireAuth(jwtService)).Post("/api/media/uploads", mh.InitiateUpload)
+
+		r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/media/{id}/complete", mh.CompleteUpload)
+		r.With(middleware.RequireAuth(jwtService)).Post("/api/media/{id}/complete", mh.CompleteUpload)
+
+		r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/media/{id}", mh.GetMedia)
+		r.With(middleware.RequireAuth(jwtService)).Get("/api/media/{id}", mh.GetMedia)
+
+		r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/media/{id}", mh.DeleteMedia)
+		r.With(middleware.RequireAuth(jwtService)).Delete("/api/media/{id}", mh.DeleteMedia)
 	}
 
 	return r
