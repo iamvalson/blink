@@ -111,9 +111,17 @@ func NewRouter(
 	postHandler := handler.NewPostHandler(postService)
 
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts", postHandler.CreatePost)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts", postHandler.ListPosts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/{id}", postHandler.GetPost)
+	r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/posts/{id}", postHandler.DeletePost)
+	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts/{id}/retry", postHandler.RetryPost)
+
+	// Legacy routes (kept for backward compatibility)
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/posts", postHandler.CreatePost)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/posts", postHandler.ListPosts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/posts/{id}", postHandler.GetPost)
+	r.With(middleware.RequireAuth(jwtService)).Delete("/api/posts/{id}", postHandler.DeletePost)
+	r.With(middleware.RequireAuth(jwtService)).Post("/api/posts/{id}/retry", postHandler.RetryPost)
 
 	// Media routes
 	if len(mediaHandlers) > 0 && mediaHandlers[0] != nil {

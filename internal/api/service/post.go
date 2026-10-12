@@ -11,59 +11,87 @@ import (
 )
 
 var (
-    ErrInvalidIdempotencyKey = errors.New("invalid idempotency key")
-    ErrNoTargets             = errors.New("at least one target is required")
-    ErrPostNotFound          = storage.ErrPostNotFound
+	ErrInvalidIdempotencyKey = errors.New("invalid idempotency key")
+	ErrNoTargets             = errors.New("at least one target is required")
+	ErrPostNotFound          = storage.ErrPostNotFound
+	ErrPostDeleteForbidden   = storage.ErrPostDeleteForbidden
 )
 
 type PostService struct {
-    posts *storage.PostRepository
+	posts *storage.PostRepository
 }
 
 func NewPostService(posts *storage.PostRepository) *PostService {
-    return &PostService{
-        posts: posts,
-    }
+	return &PostService{
+		posts: posts,
+	}
 }
 
 func (s *PostService) CreatePost(
-    ctx context.Context,
-    userID uuid.UUID,
-    idempotencyKey string,
-    input model.CreatePostInput,
+	ctx context.Context,
+	userID uuid.UUID,
+	idempotencyKey string,
+	input model.CreatePostInput,
 ) (*model.Post, error) {
-    // Validate idempotency key
-    if idempotencyKey == "" {
-        return nil, ErrInvalidIdempotencyKey
-    }
+	// Validate idempotency key
+	if idempotencyKey == "" {
+		return nil, ErrInvalidIdempotencyKey
+	}
 
-    // Validate targets
-    if len(input.Targets) == 0 {
-        return nil, ErrNoTargets
-    }
+	// Validate targets
+	if len(input.Targets) == 0 {
+		return nil, ErrNoTargets
+	}
 
-    // Validate input
-    if input.Caption == nil || *input.Caption == "" {
-        return nil, errors.New("caption is required")
-    }
+	// Validate input
+	if input.Caption == nil || *input.Caption == "" {
+		return nil, errors.New("caption is required")
+	}
 
-    // Call repository to create post
-    post, err := s.posts.CreatePost(ctx, userID, idempotencyKey, input)
-    if err != nil {
-        return nil, fmt.Errorf("create post: %w", err)
-    }
+	// Call repository to create post
+	post, err := s.posts.CreatePost(ctx, userID, idempotencyKey, input)
+	if err != nil {
+		return nil, fmt.Errorf("create post: %w", err)
+	}
 
-    return post, nil
+	return post, nil
 }
 
 func (s *PostService) GetPost(
-    ctx context.Context,
-    userID uuid.UUID,
-    postID uuid.UUID,
+	ctx context.Context,
+	userID uuid.UUID,
+	postID uuid.UUID,
 ) (*model.PostWithDetails, error) {
-    post, err := s.posts.GetPostWithDetails(ctx, userID, postID)
-    if err != nil {
-        return nil, err
-    }
-    return post, nil
+	post, err := s.posts.GetPostWithDetails(ctx, userID, postID)
+	if err != nil {
+		return nil, err
+	}
+	return post, nil
+}
+
+func (s *PostService) ListPosts(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter storage.ListPostsFilter,
+) ([]model.PostWithDetails, int, error) {
+	return s.posts.ListPosts(ctx, userID, filter)
+}
+
+func (s *PostService) DeletePost(
+	ctx context.Context,
+	userID uuid.UUID,
+	postID uuid.UUID,
+) error {
+	return s.posts.DeletePost(ctx, userID, postID)
+}
+
+func (s *PostService) RetryPost(
+	ctx context.Context,
+	userID uuid.UUID,
+	postID uuid.UUID,
+) (*model.PostWithDetails, error) {
+	if err := s.posts.RetryPost(ctx, userID, postID); err != nil {
+		return nil, err
+	}
+	return s.posts.GetPostWithDetails(ctx, userID, postID)
 }

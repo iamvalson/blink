@@ -1,30 +1,64 @@
 package model
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+// Content format constants for posts.
+// These describe the intended publishing format and are independent of post status.
+const (
+	ContentFormatVideo = "VIDEO"
+	ContentFormatShort = "SHORT"
+)
 
 type CreatePostInput struct {
-	Caption		*string		`json:"caption"`
-	MediaURL	*string		`json:"media_url"`
-	MediaType	*string		`json:"media_type"`
-	MediaID		*uuid.UUID	`json:"media_id,omitempty"`
-	Targets		[]uuid.UUID	`json:"targets"`
+	Caption       *string     `json:"caption"`
+	Title         *string     `json:"title,omitempty"`
+	MediaURL      *string     `json:"media_url"`
+	MediaType     *string     `json:"media_type"`
+	MediaID       *uuid.UUID  `json:"media_id,omitempty"`
+	MediaIDs      []uuid.UUID `json:"media_ids,omitempty"`
+	Targets       []uuid.UUID `json:"targets"`
+	ContentFormat string      `json:"content_format,omitempty"`
 }
 
-type Post struct { 
-	ID uuid.UUID `json:"id"` 
-	UserID uuid.UUID `json:"user_id"` 
-	Caption *string `json:"caption,omitempty"` 
-	MediaURL *string `json:"media_url,omitempty"` 
-	MediaType *string `json:"media_type,omitempty"` 
-	MediaID *uuid.UUID `json:"media_id,omitempty"`
-	Status string `json:"status"` 
-	CreatedAt time.Time `json:"created_at"` 
-	UpdatedAt time.Time `json:"updated_at"` 
+func (c *CreatePostInput) UnmarshalJSON(data []byte) error {
+	type Alias CreatePostInput
+	aux := &struct {
+		AltMediaIDs []uuid.UUID `json:"mediaIds"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if len(c.MediaIDs) == 0 && len(aux.AltMediaIDs) > 0 {
+		c.MediaIDs = aux.AltMediaIDs
+	}
+	if c.MediaID == nil && len(c.MediaIDs) > 0 {
+		c.MediaID = &c.MediaIDs[0]
+	} else if c.MediaID != nil && len(c.MediaIDs) == 0 {
+		c.MediaIDs = []uuid.UUID{*c.MediaID}
+	}
+	return nil
+}
+
+type Post struct {
+	ID            uuid.UUID  `json:"id"`
+	UserID        uuid.UUID  `json:"user_id"`
+	Caption       *string    `json:"caption,omitempty"`
+	Title         *string    `json:"title,omitempty"`
+	MediaURL      *string    `json:"media_url,omitempty"`
+	MediaType     *string    `json:"media_type,omitempty"`
+	MediaID       *uuid.UUID `json:"media_id,omitempty"`
+	Status        string     `json:"status"`
+	ContentFormat string     `json:"content_format"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type PostTargetDetail struct {
@@ -41,16 +75,18 @@ type PostTargetDetail struct {
 }
 
 type PostWithDetails struct {
-	ID        uuid.UUID          `json:"id"`
-	UserID    uuid.UUID          `json:"user_id"`
-	Caption   *string            `json:"caption,omitempty"`
-	MediaURL  *string            `json:"media_url,omitempty"`
-	MediaType *string            `json:"media_type,omitempty"`
-	MediaID   *uuid.UUID         `json:"media_id,omitempty"`
-	Status    string             `json:"status"`
-	Targets   []PostTargetDetail `json:"targets"`
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
+	ID            uuid.UUID          `json:"id"`
+	UserID        uuid.UUID          `json:"user_id"`
+	Caption       *string            `json:"caption,omitempty"`
+	Title         *string            `json:"title,omitempty"`
+	MediaURL      *string            `json:"media_url,omitempty"`
+	MediaType     *string            `json:"media_type,omitempty"`
+	MediaID       *uuid.UUID         `json:"media_id,omitempty"`
+	Status        string             `json:"status"`
+	ContentFormat string             `json:"content_format"`
+	Targets       []PostTargetDetail `json:"targets"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
 }
 
 

@@ -462,6 +462,31 @@ func ensureRetryMigration(t *testing.T, ctx context.Context, db *pgxpool.Pool) {
 			t.Fatalf("apply migration %s: %v", migration, err)
 		}
 	}
+
+	var hasContentFormatColumn bool
+	if err := db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'posts' AND column_name = 'content_format'
+		)
+	`).Scan(&hasContentFormatColumn); err != nil {
+		t.Fatalf("check content_format migration: %v", err)
+	}
+	if !hasContentFormatColumn {
+		for _, migration := range []string{
+			"../migrations/000006_media_storage.up.sql",
+			"../migrations/000007_media_storage_provider.up.sql",
+			"../migrations/000008_post_content_format.up.sql",
+		} {
+			data, err := os.ReadFile(migration)
+			if err != nil {
+				data, err = os.ReadFile(strings.TrimPrefix(migration, "../"))
+			}
+			if err == nil {
+				_, _ = db.Exec(ctx, string(data))
+			}
+		}
+	}
 }
 
 func assertRetryState(t *testing.T, ctx context.Context, db *pgxpool.Pool, attemptID uuid.UUID, wantStatus string, wantCount int) {
