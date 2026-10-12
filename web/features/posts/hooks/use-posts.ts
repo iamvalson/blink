@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { getPost, listPosts } from "../api/create-post";
+import { getPost, listPosts, listCalendarPosts, listUpcomingPosts } from "../api/create-post";
 import type { ListPostsFilter } from "@/types/post";
 
 export const postsQueryKey = (filter?: ListPostsFilter) =>
@@ -41,5 +41,31 @@ export function usePost(id: string | null, enabled = true) {
       return 3000;
     },
     refetchIntervalInBackground: false,
+  });
+}
+
+export const calendarQueryKey = (from: string, to: string, status?: string, platform?: string) =>
+  ["calendar", from, to, status, platform] as const;
+
+export function useCalendarPosts(
+  from: Date,
+  to: Date,
+  status?: string,
+  platform?: string,
+) {
+  return useQuery({
+    queryKey: calendarQueryKey(from.toISOString(), to.toISOString(), status, platform),
+    queryFn: () => listCalendarPosts(from, to, status, platform),
+  });
+}
+
+export const upcomingQueryKey = (limit: number, offset: number) =>
+  ["posts", "upcoming", limit, offset] as const;
+
+export function useUpcomingPosts(limit = 20, offset = 0) {
+  return useQuery({
+    queryKey: upcomingQueryKey(limit, offset),
+    queryFn: () => listUpcomingPosts({ limit, offset }),
+    refetchInterval: 30_000,
   });
 }
