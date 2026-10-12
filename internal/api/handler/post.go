@@ -3,9 +3,11 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -285,5 +287,205 @@ func (h *PostHandler) RetryPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(post); err != nil {
 		log.Error().Err(err).Msg("Failed to encode post response")
+	}
+}
+
+// ReschedulePost sets or changes the scheduled_at time for a SCHEDULED post.
+func (h *PostHandler) ReschedulePost(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	postIDStr := chi.URLParam(r, "id")
+	postID, err := uuid.Parse(postIDStr)
+	if err != nil {
+		http.Error(w, "Invalid post ID", http.StatusBadRequest)
+		return
+	}
+
+	var input model.ReschedulePostInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	if input.ScheduledAt.IsZero() {
+		http.Error(w, "scheduled_at is required", http.StatusBadRequest)
+		return
+	}
+	if input.ScheduledAt.Before(time.Now().Add(30 * time.Second)) {
+		http.Error(w, "scheduled_at must be at least 30 seconds in the future", http.StatusBadRequest)
+		return
+	}
+
+	post, err := h.postService.ReschedulePost(r.Context(), userID, postID, input.ScheduledAt)
+	if err != nil {
+		if errors.Is(err, service.ErrPostNotFound) {
+			http.Error(w, "Post not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, service.ErrPostCannotBeRescheduled) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if errors.Is(err, service.ErrInvalidScheduledTime) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		log.Error().Err(err).Str("user_id", userID.String()).Str("post_id", postID.String()).Msg("Failed to reschedule post")
+		http.Error(w, "Failed to reschedule post", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(post); err != nil {
+		log.Error().Err(err).Msg("Failed to encode post response")
+	}
+}
+
+// CancelSchedule removes the scheduled publishing of a post (transitions back to DRAFT/QUEUED).
+func (h *PostHandler) CancelSchedule(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	postIDStr := chi.URLParam(r, "id")
+	postID, err := uuid.Parse(postIDStr)
+	if err != nil {
+		http.Error(w, "Invalid post ID", http.StatusBadRequest)
+		return
+	}
+
+	post, err := h.postService.CancelSchedule(r.Context(), userID, postID)
+	if err != nil {
+		if errors.Is(err, service.ErrPostNotFound) {
+			http.Error(w, "Post not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, service.ErrPostCannotBeCancelled) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		log.Error().Err(err).Str("user_id", userID.String()).Str("post_id", postID.String()).Msg("Failed to cancel scheduled post")
+		http.Error(w, "Failed to cancel schedule", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(post); err != nil {
+		log.Error().Err(err).Msg("Failed to encode post response")
+	}
+}
+
+// ListCalendarPosts returns posts within a date range for the calendar view.
+func (h *PostHandler) ListCalendarPosts(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	q := r.URL.Query()
+	fromStr := q.Get("from")
+	toStr := q.Get("to")
+
+	if fromStr == "" || toStr == "" {
+		http.Error(w, "from and to query params are required (RFC3339)", http.StatusBadRequest)
+		return
+	}
+
+	from, err := time.Parse(time.RFC3339, fromStr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid from: %v", err), http.StatusBadRequest)
+		return
+	}
+	to, err := time.Parse(time.RFC3339, toStr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid to: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	posts, err := h.postService.ListCalendarPosts(r.Context(), userID, from, to, q.Get("status"), q.Get("platform"))
+	if err != nil {
+		log.Error().Err(err).Str("user_id", userID.String()).Msg("Failed to list calendar posts")
+		http.Error(w, "Failed to list calendar posts", http.StatusInternalServerError)
+		return
+	}
+	if posts == nil {
+		posts = []model.PostWithDetails{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(posts); err != nil {
+		log.Error().Err(err).Msg("Failed to encode calendar posts")
+	}
+}
+
+// ListUpcomingPosts returns upcoming scheduled posts for the sidebar/feed.
+func (h *PostHandler) ListUpcomingPosts(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	q := r.URL.Query()
+	limit := 20
+	offset := 0
+	if s := q.Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if s := q.Get("offset"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	posts, total, err := h.postService.ListUpcomingPosts(r.Context(), userID, limit, offset)
+	if err != nil {
+		log.Error().Err(err).Str("user_id", userID.String()).Msg("Failed to list upcoming posts")
+		http.Error(w, "Failed to list upcoming posts", http.StatusInternalServerError)
+		return
+	}
+	if posts == nil {
+		posts = []model.PostWithDetails{}
+	}
+
+	resp := ListPostsResponse{
+		Posts:  posts,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("Failed to encode upcoming posts")
 	}
 }

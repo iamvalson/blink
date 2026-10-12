@@ -111,8 +111,8 @@ func run(ctx context.Context) error {
 		zlog.Info().Str("event", "redis_shutdown_completed").Msg("Redis closed")
 	}()
 
-	// Initialize outbox dispatcher
-	dispatcher := outbox.NewDispatcher(outboxRepo, jobsClient)
+	// Initialize outbox & schedule dispatcher
+	dispatcher := outbox.NewDispatcher(outboxRepo, jobsClient).WithPostRepository(posts)
 
 	// Start outbox dispatcher in background (runs every 5 seconds)
 	var dispatcherWG sync.WaitGroup
@@ -133,6 +133,9 @@ func run(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				operationCtx, cancel := context.WithTimeout(dispatcherCtx, 10*time.Second)
+				if err := dispatcher.ProcessScheduledPosts(operationCtx); err != nil {
+					zlog.Error().Err(err).Msg("Failed to claim due scheduled posts")
+				}
 				if err := dispatcher.ProcessPendingEvents(operationCtx); err != nil {
 					zlog.Error().Err(err).Msg("Failed to process pending events")
 				}
@@ -141,7 +144,7 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	zlog.Info().Msg("Outbox dispatcher started")
+	zlog.Info().Msg("Outbox and scheduling dispatcher started")
 
 	// Media Storage & Service
 	mediaStore, err := mediastore.InitStore(cfg)
