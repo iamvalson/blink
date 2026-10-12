@@ -2,6 +2,7 @@
 
 import { ImagePlus, Loader2, Trash2, Upload, AlertCircle } from "lucide-react";
 import { useRef } from "react";
+import type { VideoMetadata } from "@/features/posts/utils/video-validator";
 
 export type UploadStatus = "idle" | "uploading" | "complete" | "error";
 
@@ -13,16 +14,18 @@ export type MediaFile = {
   uploadProgress?: number;
   mediaId?: string;
   error?: string;
+  metadata?: VideoMetadata;
 };
 
 type MediaUploaderProps = {
   media: MediaFile[];
   onChange: (media: MediaFile[]) => void;
   onUpload?: (localId: string, file: File) => void;
+  onRemove?: (item: MediaFile) => void;
   disabled?: boolean;
 };
 
-export function MediaUploader({ media, onChange, onUpload, disabled }: MediaUploaderProps) {
+export function MediaUploader({ media, onChange, onUpload, onRemove, disabled }: MediaUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = (files: FileList | null) => {
@@ -50,6 +53,9 @@ export function MediaUploader({ media, onChange, onUpload, disabled }: MediaUplo
 
     if (fileToRemove) {
       URL.revokeObjectURL(fileToRemove.previewUrl);
+      if (onRemove) {
+        onRemove(fileToRemove);
+      }
     }
 
     onChange(media.filter((item) => item.id !== id));

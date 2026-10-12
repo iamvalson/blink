@@ -1,18 +1,32 @@
-import type { MediaUploadResponse } from "@/types/post";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+import { apiClient } from "@/lib/api/client";
+import type { InitiateUploadResponse, MediaUploadResponse } from "@/types/post";
 
 export async function uploadMedia(
   file: File,
   onProgress?: (percent: number) => void,
 ): Promise<MediaUploadResponse> {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append("file", file, file.name);
+  // 1. Initiate presigned upload authorization
+  const initRes = await apiClient<InitiateUploadResponse>("/api/v1/media/uploads", {
+    method: "POST",
+    body: JSON.stringify({
+      filename: file.name,
+      contentType: file.type || "application/octet-stream",
+      size: file.size,
+    }),
+  });
 
+  // 2. Direct upload to Cloudflare R2 presigned URL
+  await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_URL}/api/v1/media`);
-    xhr.withCredentials = true;
+    const method = initRes.method || "PUT";
+    xhr.open(method, initRes.upload_url);
+
+    // Set signed headers (e.g., Content-Type, Content-Length if specified)
+    if (initRes.headers) {
+      Object.entries(initRes.headers).forEach(([k, v]) => {
+        xhr.setRequestHeader(k, v);
+      });
+    }
 
     if (onProgress) {
       xhr.upload.onprogress = (event) => {
@@ -25,37 +39,42 @@ export async function uploadMedia(
 
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const data = JSON.parse(xhr.responseText) as MediaUploadResponse;
-          resolve(data);
-        } catch {
-          reject(new Error("Invalid JSON response from upload server"));
-        }
+        resolve();
       } else {
-        let errMsg = `Upload failed with status ${xhr.status}`;
-        try {
-          const data = JSON.parse(xhr.responseText);
-          if (data.message || data.error) {
-            errMsg = data.message || data.error;
-          }
-        } catch {
-          if (xhr.responseText) {
-            errMsg = xhr.responseText;
-          }
+        let errMsg = `Direct upload failed with status ${xhr.status}`;
+        if (xhr.responseText) {
+          errMsg += `: ${xhr.responseText}`;
         }
         reject(new Error(errMsg));
       }
     };
 
     xhr.onerror = () => {
-      reject(new Error("Network error during media upload"));
+      reject(new Error("Network error during direct storage upload. Check CORS settings."));
     };
 
     xhr.ontimeout = () => {
-      reject(new Error("Media upload timed out"));
+      reject(new Error("Storage upload timed out"));
     };
 
-    xhr.send(formData);
+    xhr.send(file);
+  });
+
+  // 3. Confirm upload and mark media as uploaded & verified
+  const completeRes = await apiClient<MediaUploadResponse>(
+    `/api/v1/media/${initRes.id}/complete`,
+    {
+      method: "POST",
+    },
+  );
+
+  return completeRes;
+}
+
+export async function deleteMedia(mediaId: string): Promise<void> {
+  await apiClient<void>(`/api/v1/media/${mediaId}`, {
+    method: "DELETE",
   });
 }
+
 
