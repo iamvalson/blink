@@ -15,6 +15,7 @@ import (
 
 type Dispatcher struct {
 	outboxRepo *storage.OutboxRepository
+	postsRepo  *storage.PostRepository
 	jobsClient *jobs.Client
 }
 
@@ -23,6 +24,28 @@ func NewDispatcher(outboxRepo *storage.OutboxRepository, jobsClient *jobs.Client
 		outboxRepo: outboxRepo,
 		jobsClient: jobsClient,
 	}
+}
+
+// WithPostRepository attaches the post repository to enable scheduled posts claiming.
+func (d *Dispatcher) WithPostRepository(postsRepo *storage.PostRepository) *Dispatcher {
+	d.postsRepo = postsRepo
+	return d
+}
+
+// ProcessScheduledPosts queries and claims due scheduled posts using FOR UPDATE SKIP LOCKED
+// and inserts outbox events for them.
+func (d *Dispatcher) ProcessScheduledPosts(ctx context.Context) error {
+	if d.postsRepo == nil {
+		return nil
+	}
+	claimed, err := d.postsRepo.ClaimDueScheduledPosts(ctx, 50)
+	if err != nil {
+		return fmt.Errorf("claim due scheduled posts: %w", err)
+	}
+	if len(claimed) > 0 {
+		log.Info().Int("count", len(claimed)).Msg("Claimed due scheduled posts for dispatch")
+	}
+	return nil
 }
 
 // ProcessPendingEvents reads pending outbox events and enqueues corresponding jobs
@@ -98,5 +121,15 @@ func (d *Dispatcher) handlePostCreated(event *model.OutboxEvent) (*asynq.Task, e
 		return nil, fmt.Errorf("parse post_id: %w", err)
 	}
 
-	return jobs.NewPublishTask(postID)
+	gen := 0
+	if genVal, ok := event.Payload["scheduling_generation"]; ok {
+		switch v := genVal.(type) {
+		case float64:
+			gen = int(v)
+		case int:
+			gen = v
+		}
+	}
+
+	return jobs.NewPublishTask(postID, gen)
 }

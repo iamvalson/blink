@@ -117,14 +117,15 @@ func (r *PublicationRepository) GetPostForPublishing(ctx context.Context, postID
 	err := r.db.QueryRow(
 		ctx,
 		`
-            SELECT id, user_id, caption, media_url, media_type, media_id, status, created_at, updated_at
+            SELECT id, user_id, caption, media_url, media_type, media_id, status, content_format, scheduled_at, published_at, scheduling_generation, created_at, updated_at
             FROM posts
             WHERE id = $1
         `,
 		postID,
 	).Scan(
 		&post.ID, &post.UserID, &post.Caption, &post.MediaURL, &post.MediaType,
-		&post.MediaID, &post.Status, &post.CreatedAt, &post.UpdatedAt,
+		&post.MediaID, &post.Status, &post.ContentFormat, &post.ScheduledAt, &post.PublishedAt,
+		&post.SchedulingGeneration, &post.CreatedAt, &post.UpdatedAt,
 	)
 
 	if err != nil {
@@ -444,15 +445,28 @@ func (r *PublicationRepository) UpdateOAuthTokens(ctx context.Context, accountID
 
 // UpdatePostStatus updates a post's overall publishing status
 func (r *PublicationRepository) UpdatePostStatus(ctx context.Context, postID uuid.UUID, status string) error {
-	_, err := r.db.Exec(
-		ctx,
-		`
-			UPDATE posts
-			SET status = $1, updated_at = NOW()
-			WHERE id = $2
-		`,
-		status, postID,
-	)
+	var err error
+	if status == "PUBLISHED" {
+		_, err = r.db.Exec(
+			ctx,
+			`
+				UPDATE posts
+				SET status = $1, published_at = NOW(), updated_at = NOW()
+				WHERE id = $2
+			`,
+			status, postID,
+		)
+	} else {
+		_, err = r.db.Exec(
+			ctx,
+			`
+				UPDATE posts
+				SET status = $1, updated_at = NOW()
+				WHERE id = $2
+			`,
+			status, postID,
+		)
+	}
 
 	if err != nil {
 		return fmt.Errorf("update post status: %w", err)

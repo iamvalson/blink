@@ -126,10 +126,36 @@ func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Ta
 	}
 	contextLogger = logger.WithJobContext(jobID, post.ID.String(), post.UserID.String(), "", 0)
 
-	// Check if post is already published
-	if post.Status != "QUEUED" {
-		contextLogger.Info().Str("event", "publish_job_skipped").Str("status", post.Status).Msg("post not in QUEUED status, skipping")
+	// Check if post is in an eligible status for publishing
+	if post.Status != "QUEUED" && post.Status != "SCHEDULED" && post.Status != "PUBLISHING" {
+		contextLogger.Info().Str("event", "publish_job_skipped").Str("status", post.Status).Msg("post not in eligible status, skipping")
 		return nil
+	}
+
+	// Validate scheduling generation if job specified one (stale job rejection)
+	if job.SchedulingGeneration > 0 && post.SchedulingGeneration != job.SchedulingGeneration {
+		contextLogger.Info().
+			Int("job_gen", job.SchedulingGeneration).
+			Int("post_gen", post.SchedulingGeneration).
+			Str("event", "publish_job_stale_generation").
+			Msg("scheduling generation mismatch (job is stale), skipping")
+		return nil
+	}
+
+	// If post has a future scheduled time, verify it is due (allowing clock skew tolerance of 30 seconds)
+	if post.ScheduledAt != nil && post.ScheduledAt.After(time.Now().Add(30*time.Second)) {
+		contextLogger.Warn().
+			Time("scheduled_at", *post.ScheduledAt).
+			Str("event", "publish_job_not_due").
+			Msg("scheduled post is not yet due, skipping")
+		return nil
+	}
+
+	// Transition post to PUBLISHING status
+	if post.Status != "PUBLISHING" {
+		if err := p.updatePostStatus(ctx, post.ID, "PUBLISHING"); err != nil {
+			contextLogger.Warn().Err(err).Msg("failed to update post status to PUBLISHING")
+		}
 	}
 
 	// Get pending targets

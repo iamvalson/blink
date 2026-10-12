@@ -30,7 +30,9 @@ import {
 
 type SubmitPhase =
   | "idle"
-  | "submitting" // HTTP request in flight
+  | "submitting" // HTTP request in flight (publish now)
+  | "scheduling" // HTTP request in flight (schedule)
+  | "scheduled" // backend accepted scheduled post
   | "queued" // backend accepted, job enqueued
   | "published" // terminal success
   | "failed"; // terminal failure
@@ -78,6 +80,7 @@ export function PostComposer() {
   const [phase, setPhase] = useState<SubmitPhase>("idle");
   const [submittedPost, setSubmittedPost] = useState<PostResponse | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isScheduleSubmitting, setIsScheduleSubmitting] = useState(false);
 
   // Poll the post status after submission
   const isTracking =
@@ -436,9 +439,103 @@ export function PostComposer() {
     }
   };
 
+  const handleScheduleSubmit = async (isoDate: string) => {
+    // Run same validations as handlePublish
+    if (isLoadingAccounts) return;
+    if (connectedAccounts.length === 0) {
+      toast.error("Connect a social account before scheduling.");
+      return;
+    }
+    if (!caption.trim()) {
+      toast.error("Add a caption before scheduling.");
+      return;
+    }
+    if (resolvedSelectedPlatforms.length === 0) {
+      toast.error("Select at least one connected account.");
+      return;
+    }
+    if (hasUploadingMedia) {
+      toast.error("Please wait for all media uploads to finish before scheduling.");
+      return;
+    }
+    const failedMedia = media.find((m) => m.uploadStatus === "error");
+    if (failedMedia) {
+      toast.error("Some media failed to upload. Remove or re-upload before scheduling.");
+      return;
+    }
+    if (isYouTubeSelected) {
+      if (isValidatingVideo) {
+        toast.error("Please wait for video metadata validation to finish before scheduling.");
+        return;
+      }
+      if (videoValidation?.status === "error") {
+        toast.error(videoValidation.error || "Please resolve the video file error before scheduling.");
+        return;
+      }
+      const hasCompletedVideo = media.some(
+        (m) =>
+          m.file.type.startsWith("video/") &&
+          m.uploadStatus === "complete" &&
+          m.mediaId,
+      );
+      if (!hasCompletedVideo) {
+        toast.error("YouTube Video/Short scheduling requires a completed video upload.");
+        return;
+      }
+    }
+
+    const targets = resolvedSelectedPlatforms
+      .map(
+        (platform) =>
+          connectedAccounts.find((account) => account.platform === platform)?.id,
+      )
+      .filter((target): target is string => Boolean(target));
+
+    if (targets.length === 0) {
+      toast.error("No connected account is available for the selected platforms.");
+      return;
+    }
+
+    const completedMediaItems = media.filter(
+      (m) => m.uploadStatus === "complete" && Boolean(m.mediaId),
+    );
+    const mediaIds = completedMediaItems
+      .map((m) => m.mediaId)
+      .filter((id): id is string => Boolean(id));
+    const primaryMediaId = mediaIds.length > 0 ? mediaIds[0] : null;
+
+    const contentFormat: ContentFormat = isYouTubeSelected ? youtubeFormat : "VIDEO";
+
+    try {
+      setScheduleOpen(false);
+      setIsScheduleSubmitting(true);
+      setPhase("scheduling");
+
+      const post = await createPost({
+        caption: caption.trim(),
+        targets,
+        media_id: primaryMediaId,
+        media_ids: mediaIds.length > 0 ? mediaIds : null,
+        content_format: contentFormat,
+        scheduled_at: isoDate,
+      });
+
+      setSubmittedPost(post);
+      setPhase("scheduled");
+      toast.success("Post scheduled successfully!");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to schedule the post.";
+      toast.error(message);
+      setPhase("idle");
+    } finally {
+      setIsScheduleSubmitting(false);
+    }
+  };
+
   const handleReset = () => {
     // Only reset after a terminal state
-    if (phase !== "published" && phase !== "failed") return;
+    if (phase !== "published" && phase !== "failed" && phase !== "scheduled") return;
     activeValidationAbortRef.current?.abort();
     setVideoMetadata(null);
     setVideoValidation(null);
@@ -454,11 +551,13 @@ export function PostComposer() {
   };
 
   const isSubmitting = phase === "submitting";
-  const isDisabled = isSubmitting || phase === "queued" || phase === "published";
+  const isDisabled = isSubmitting || phase === "scheduling" || phase === "queued" || phase === "published" || phase === "scheduled";
 
   const publishButtonLabel = {
     idle: "Publish",
     submitting: "Submitting…",
+    scheduling: "Scheduling…",
+    scheduled: "Scheduled",
     queued: "Queued",
     published: "Published",
     failed: "Retry Publish",
@@ -564,8 +663,28 @@ export function PostComposer() {
               />
             )}
 
+            {/* Scheduled confirmation banner */}
+            {phase === "scheduled" && submittedPost?.scheduled_at && (
+              <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
+                <CalendarClock className="h-4 w-4 shrink-0" />
+                <span>
+                  Scheduled for{" "}
+                  <strong>
+                    {new Date(submittedPost.scheduled_at).toLocaleString(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </strong>
+                  {" — "}
+                  <Link href="/calendar" className="underline underline-offset-2">
+                    View calendar
+                  </Link>
+                </span>
+              </div>
+            )}
+
             {/* Publishing progress panel */}
-            {displayPost && phase !== "idle" && (
+            {displayPost && phase !== "idle" && phase !== "scheduled" && (
               <PublishingProgress
                 post={displayPost}
                 onRetry={phase === "failed" ? handleRetry : undefined}
@@ -576,7 +695,7 @@ export function PostComposer() {
 
           <CardFooter className="flex flex-col gap-3 border-t bg-muted/30 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex gap-2">
-              {(phase === "published" || phase === "failed") && (
+              {(phase === "published" || phase === "failed" || phase === "scheduled") && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -633,15 +752,8 @@ export function PostComposer() {
       <ScheduleDialog
         open={scheduleOpen}
         onOpenChange={setScheduleOpen}
-        onSchedule={(date) => {
-          console.log("Schedule post:", {
-            caption,
-            platforms: resolvedSelectedPlatforms,
-            media,
-            date,
-          });
-          setScheduleOpen(false);
-        }}
+        onSchedule={handleScheduleSubmit}
+        isSubmitting={isScheduleSubmitting}
       />
     </>
   );

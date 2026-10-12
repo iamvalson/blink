@@ -10,6 +10,7 @@ export interface CreatePostRequest {
   mediaIds?: string[] | null;
   content_format?: ContentFormat;
   title?: string | null;
+  scheduled_at?: string | null;
 }
 
 export interface InitiateUploadResponse {
@@ -53,8 +54,14 @@ export interface PostResponse {
   status: string;
   content_format: ContentFormat;
   targets?: PostTarget[];
+  scheduled_at?: string | null;
+  published_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ReschedulePostRequest {
+  scheduled_at: string;
 }
 
 export interface ListPostsResponse {

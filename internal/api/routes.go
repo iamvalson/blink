@@ -112,9 +112,13 @@ func NewRouter(
 
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts", postHandler.CreatePost)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts", postHandler.ListPosts)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/upcoming", postHandler.ListUpcomingPosts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/{id}", postHandler.GetPost)
 	r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/posts/{id}", postHandler.DeletePost)
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts/{id}/retry", postHandler.RetryPost)
+	r.With(middleware.RequireAuth(jwtService)).Patch("/api/v1/posts/{id}/schedule", postHandler.ReschedulePost)
+	r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/posts/{id}/schedule", postHandler.CancelSchedule)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/calendar", postHandler.ListCalendarPosts)
 
 	// Legacy routes (kept for backward compatibility)
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/posts", postHandler.CreatePost)

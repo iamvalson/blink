@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/iamvalson/blink/internal/model"
@@ -11,10 +12,13 @@ import (
 )
 
 var (
-	ErrInvalidIdempotencyKey = errors.New("invalid idempotency key")
-	ErrNoTargets             = errors.New("at least one target is required")
-	ErrPostNotFound          = storage.ErrPostNotFound
-	ErrPostDeleteForbidden   = storage.ErrPostDeleteForbidden
+	ErrInvalidIdempotencyKey   = errors.New("invalid idempotency key")
+	ErrNoTargets               = errors.New("at least one target is required")
+	ErrPostNotFound            = storage.ErrPostNotFound
+	ErrPostDeleteForbidden     = storage.ErrPostDeleteForbidden
+	ErrPostCannotBeRescheduled = storage.ErrPostCannotBeRescheduled
+	ErrInvalidScheduledTime    = storage.ErrInvalidScheduledTime
+	ErrPostCannotBeCancelled   = storage.ErrPostCannotBeCancelled
 )
 
 type PostService struct {
@@ -94,4 +98,38 @@ func (s *PostService) RetryPost(
 		return nil, err
 	}
 	return s.posts.GetPostWithDetails(ctx, userID, postID)
+}
+
+func (s *PostService) ReschedulePost(
+	ctx context.Context,
+	userID uuid.UUID,
+	postID uuid.UUID,
+	newScheduledAt time.Time,
+) (*model.PostWithDetails, error) {
+	return s.posts.ReschedulePost(ctx, userID, postID, newScheduledAt)
+}
+
+func (s *PostService) CancelSchedule(
+	ctx context.Context,
+	userID uuid.UUID,
+	postID uuid.UUID,
+) (*model.PostWithDetails, error) {
+	return s.posts.CancelSchedule(ctx, userID, postID)
+}
+
+func (s *PostService) ListCalendarPosts(
+	ctx context.Context,
+	userID uuid.UUID,
+	from, to time.Time,
+	status, platform string,
+) ([]model.PostWithDetails, error) {
+	return s.posts.ListCalendarPosts(ctx, userID, from, to, status, platform)
+}
+
+func (s *PostService) ListUpcomingPosts(
+	ctx context.Context,
+	userID uuid.UUID,
+	limit, offset int,
+) ([]model.PostWithDetails, int, error) {
+	return s.posts.ListUpcomingPosts(ctx, userID, limit, offset)
 }
