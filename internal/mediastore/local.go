@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // LocalStore implements Store on the local filesystem.
@@ -49,7 +51,7 @@ func (s *LocalStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("media not found: %q", key)
+			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("open media %q: %w", key, err)
 	}
@@ -65,3 +67,44 @@ func (s *LocalStore) Delete(_ context.Context, key string) error {
 	return nil
 }
 
+// Head checks object existence and returns metadata.
+func (s *LocalStore) Head(_ context.Context, key string) (*ObjectInfo, error) {
+	path := filepath.Join(s.basePath, filepath.FromSlash(key))
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("stat media %q: %w", key, err)
+	}
+
+	ext := filepath.Ext(path)
+	ct := mime.TypeByExtension(ext)
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+
+	return &ObjectInfo{
+		Key:          key,
+		Size:         fi.Size(),
+		ContentType:  ct,
+		LastModified: fi.ModTime(),
+	}, nil
+}
+
+// PresignPut generates a simulated presigned upload URL for local development.
+func (s *LocalStore) PresignPut(_ context.Context, key string, contentType string, _ int64, ttl time.Duration) (*PresignedUpload, error) {
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	headers := make(map[string]string)
+	if contentType != "" {
+		headers["Content-Type"] = contentType
+	}
+	return &PresignedUpload{
+		URL:       fmt.Sprintf("/api/v1/media/local-upload?key=%s", key),
+		Method:    "PUT",
+		Headers:   headers,
+		ExpiresAt: time.Now().Add(ttl),
+	}, nil
+}

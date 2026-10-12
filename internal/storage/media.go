@@ -12,7 +12,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-var ErrMediaNotFound = errors.New("media not found")
+var (
+	ErrMediaNotFound  = errors.New("media not found")
+	ErrMediaInUse     = errors.New("media is referenced by an active post and cannot be deleted")
+	ErrMediaForbidden = errors.New("access to media is forbidden")
+)
 
 type mediaDB interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
@@ -32,18 +36,22 @@ func NewMediaRepository(db mediaDB) *MediaRepository {
 func (r *MediaRepository) CreatePendingMedia(
 	ctx context.Context,
 	userID uuid.UUID,
+	storageProvider string,
 	storageKey string,
 	originalFilename string,
 	contentType string,
 	fileSize int64,
 ) (*model.Media, error) {
+	if storageProvider == "" {
+		storageProvider = "r2"
+	}
 	var m model.Media
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO media (user_id, storage_key, original_filename, content_type, file_size, upload_status)
-		VALUES ($1, $2, $3, $4, $5, 'pending')
-		RETURNING id, user_id, storage_key, original_filename, content_type, file_size, upload_status, created_at, updated_at
-	`, userID, storageKey, originalFilename, contentType, fileSize).Scan(
-		&m.ID, &m.UserID, &m.StorageKey, &m.OriginalFilename, &m.ContentType,
+		INSERT INTO media (user_id, storage_provider, storage_key, original_filename, content_type, file_size, upload_status)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+		RETURNING id, user_id, storage_provider, storage_key, original_filename, content_type, file_size, upload_status, created_at, updated_at
+	`, userID, storageProvider, storageKey, originalFilename, contentType, fileSize).Scan(
+		&m.ID, &m.UserID, &m.StorageProvider, &m.StorageKey, &m.OriginalFilename, &m.ContentType,
 		&m.FileSize, &m.UploadStatus, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
@@ -82,11 +90,11 @@ func (r *MediaRepository) MarkFailed(ctx context.Context, id uuid.UUID) error {
 func (r *MediaRepository) GetMedia(ctx context.Context, id, userID uuid.UUID) (*model.Media, error) {
 	var m model.Media
 	err := r.db.QueryRow(ctx, `
-		SELECT id, user_id, storage_key, original_filename, content_type, file_size, upload_status, created_at, updated_at
+		SELECT id, user_id, storage_provider, storage_key, original_filename, content_type, file_size, upload_status, created_at, updated_at
 		FROM media
 		WHERE id = $1 AND user_id = $2
 	`, id, userID).Scan(
-		&m.ID, &m.UserID, &m.StorageKey, &m.OriginalFilename, &m.ContentType,
+		&m.ID, &m.UserID, &m.StorageProvider, &m.StorageKey, &m.OriginalFilename, &m.ContentType,
 		&m.FileSize, &m.UploadStatus, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
@@ -102,11 +110,11 @@ func (r *MediaRepository) GetMedia(ctx context.Context, id, userID uuid.UUID) (*
 func (r *MediaRepository) GetMediaByID(ctx context.Context, id uuid.UUID) (*model.Media, error) {
 	var m model.Media
 	err := r.db.QueryRow(ctx, `
-		SELECT id, user_id, storage_key, original_filename, content_type, file_size, upload_status, created_at, updated_at
+		SELECT id, user_id, storage_provider, storage_key, original_filename, content_type, file_size, upload_status, created_at, updated_at
 		FROM media
 		WHERE id = $1
 	`, id).Scan(
-		&m.ID, &m.UserID, &m.StorageKey, &m.OriginalFilename, &m.ContentType,
+		&m.ID, &m.UserID, &m.StorageProvider, &m.StorageKey, &m.OriginalFilename, &m.ContentType,
 		&m.FileSize, &m.UploadStatus, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
@@ -118,3 +126,31 @@ func (r *MediaRepository) GetMediaByID(ctx context.Context, id uuid.UUID) (*mode
 	return &m, nil
 }
 
+// IsReferencedByPost checks if a media asset is attached to any post.
+func (r *MediaRepository) IsReferencedByPost(ctx context.Context, id uuid.UUID) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM posts WHERE media_id = $1
+		)
+	`, id).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check media post reference: %w", err)
+	}
+	return exists, nil
+}
+
+// DeleteMedia removes the media record if it belongs to the user.
+func (r *MediaRepository) DeleteMedia(ctx context.Context, id, userID uuid.UUID) error {
+	tag, err := r.db.Exec(ctx, `
+		DELETE FROM media
+		WHERE id = $1 AND user_id = $2
+	`, id, userID)
+	if err != nil {
+		return fmt.Errorf("delete media record: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrMediaNotFound
+	}
+	return nil
+}
