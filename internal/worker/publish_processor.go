@@ -23,7 +23,6 @@ import (
 	"github.com/iamvalson/blink/internal/metrics"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
-	"github.com/rs/zerolog/log"
 )
 
 var mediaDownloadClient = &http.Client{Timeout: 5 * time.Minute}
@@ -84,7 +83,6 @@ type publicationStore interface {
 	MarkAttemptFailed(context.Context, uuid.UUID, string, string) error
 	MarkAttemptRetrying(context.Context, uuid.UUID, string, string, string, time.Time) error
 	MarkPostTargetPublished(context.Context, uuid.UUID) error
-	UpdatePostStatus(context.Context, uuid.UUID, string) error
 	RecordPermanentFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *string, string, string, int, string, string, string, string, []byte) error
 }
 
@@ -820,16 +818,4 @@ func (p *PublishProcessor) scheduleReconciliation(
 	return repo.QueueReconciliation(
 		ctx, postID, targetID, post.SchedulingGeneration,
 	)
-}
-
-func (p *PublishProcessor) updatePostStatus(ctx context.Context, postID uuid.UUID, status string) error {
-	if err := p.publications.UpdatePostStatus(ctx, postID, status); err != nil {
-		return fmt.Errorf("update post status: %w", err)
-	}
-
-	log.Info().
-		Str("post_id", postID.String()).
-		Str("status", status).
-		Msg("Post status updated")
-	return nil
 }
