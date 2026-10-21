@@ -1,8 +1,11 @@
 package twitter
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -195,10 +198,378 @@ func TestPublishAPIErrorWithMockServer(t *testing.T) {
 	}
 }
 
-func TestRealMediaUploadRejectsUnsupportedOperation(t *testing.T) {
+func TestUploadMediaValidation(t *testing.T) {
 	conn := New(TwitterConfig{})
+
+	// 1. Missing token
+	_, err := conn.UploadMedia(context.Background(), "", "attempt", strings.NewReader("data"), "image/png")
+	if err == nil {
+		t.Fatal("expected error with empty token")
+	}
+
+	// 2. Nil media
 	id, err := conn.UploadMedia(context.Background(), "token", "attempt", nil, "image/png")
 	if err == nil || id != "" || connectors.ClassifyError(err) != connectors.ErrorPermanent {
-		t.Fatalf("unsupported upload returned id=%q err=%v", id, err)
+		t.Fatalf("nil media upload returned id=%q err=%v", id, err)
+	}
+
+	// 3. Unsupported media type
+	_, err = conn.UploadMedia(context.Background(), "token", "attempt", strings.NewReader("data"), "application/pdf")
+	if err == nil || connectors.ClassifyError(err) != connectors.ErrorPermanent {
+		t.Fatalf("expected permanent error for unsupported media type, got %v", err)
+	}
+
+	// 4. Empty media
+	_, err = conn.UploadMedia(context.Background(), "token", "attempt", strings.NewReader(""), "image/png")
+	if err == nil || connectors.ClassifyError(err) != connectors.ErrorPermanent {
+		t.Fatalf("expected permanent error for empty media, got %v", err)
 	}
 }
+
+func TestUploadMedia_SimpleImageSuccess(t *testing.T) {
+	var mediaCategoryReceived string
+	var mediaReceived []byte
+	var authHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		err := r.ParseMultipartForm(10 * 1024 * 1024)
+		if err != nil {
+			t.Errorf("failed to parse multipart form: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mediaCategoryReceived = r.FormValue("media_category")
+		file, _, err := r.FormFile("media")
+		if err == nil {
+			defer file.Close()
+			mediaReceived, _ = io.ReadAll(file)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"1880028106020515840","media_key":"3_1880028106020515840"}}`))
+	}))
+	defer server.Close()
+
+	conn := &Connector{
+		mediaUploadURL: server.URL,
+		httpClient:     server.Client(),
+	}
+
+	imageContent := []byte("fake image binary content")
+	mediaID, err := conn.UploadMedia(context.Background(), "test_token_123", "attempt-1", bytes.NewReader(imageContent), "image/jpeg")
+	if err != nil {
+		t.Fatalf("UploadMedia failed: %v", err)
+	}
+
+	if mediaID != "1880028106020515840" {
+		t.Errorf("expected mediaID 1880028106020515840, got %s", mediaID)
+	}
+	if authHeader != "Bearer test_token_123" {
+		t.Errorf("expected auth header Bearer test_token_123, got %s", authHeader)
+	}
+	if mediaCategoryReceived != "tweet_image" {
+		t.Errorf("expected media_category tweet_image, got %s", mediaCategoryReceived)
+	}
+	if !bytes.Equal(mediaReceived, imageContent) {
+		t.Errorf("received media content did not match uploaded content")
+	}
+}
+
+func TestUploadMedia_RateLimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "45")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"detail":"rate limit exceeded"}`))
+	}))
+	defer server.Close()
+
+	conn := &Connector{
+		mediaUploadURL: server.URL,
+		httpClient:     server.Client(),
+	}
+
+	_, err := conn.UploadMedia(context.Background(), "test_token", "attempt-1", strings.NewReader("sample"), "image/png")
+	if !errors.Is(err, connectors.ErrRateLimited) {
+		t.Fatalf("expected ErrRateLimited, got %v", err)
+	}
+	var rateLimitErr *connectors.RateLimitError
+	if !errors.As(err, &rateLimitErr) {
+		t.Fatal("expected typed RateLimitError")
+	}
+	if rateLimitErr.RetryAfter != 45*time.Second {
+		t.Fatalf("expected retry after 45s, got %s", rateLimitErr.RetryAfter)
+	}
+}
+
+func TestUploadMedia_ChunkedVideoSuccessWithStatusPolling(t *testing.T) {
+	var initCalled, appendCalled, finalizeCalled, statusCalls int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		command := r.URL.Query().Get("command")
+		if command == "" && r.Method == http.MethodPost {
+			// Might be APPEND with multipart
+			_ = r.ParseMultipartForm(10 * 1024 * 1024)
+			command = r.FormValue("command")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch command {
+		case "INIT":
+			initCalled++
+			if r.URL.Query().Get("media_category") != "tweet_video" {
+				t.Errorf("expected tweet_video, got %s", r.URL.Query().Get("media_category"))
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"video_12345"}}`))
+
+		case "APPEND":
+			appendCalled++
+			if r.FormValue("media_id") != "video_12345" {
+				t.Errorf("expected media_id video_12345, got %s", r.FormValue("media_id"))
+			}
+			w.WriteHeader(http.StatusNoContent)
+
+		case "FINALIZE":
+			finalizeCalled++
+			if r.URL.Query().Get("media_id") != "video_12345" {
+				t.Errorf("expected media_id video_12345, got %s", r.URL.Query().Get("media_id"))
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"video_12345","processing_info":{"state":"pending","check_after_secs":1}}}`))
+
+		case "STATUS":
+			statusCalls++
+			if r.URL.Query().Get("media_id") != "video_12345" {
+				t.Errorf("expected media_id video_12345, got %s", r.URL.Query().Get("media_id"))
+			}
+			w.WriteHeader(http.StatusOK)
+			if statusCalls == 1 {
+				_, _ = w.Write([]byte(`{"data":{"id":"video_12345","processing_info":{"state":"in_progress","check_after_secs":1}}}`))
+			} else {
+				_, _ = w.Write([]byte(`{"data":{"id":"video_12345","processing_info":{"state":"succeeded"}}}`))
+			}
+
+		default:
+			t.Errorf("unexpected command: %s (query: %s, method: %s)", command, r.URL.RawQuery, r.Method)
+			http.Error(w, "unexpected command", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	conn := &Connector{
+		mediaUploadURL: server.URL,
+		httpClient:     server.Client(),
+	}
+
+	videoData := []byte("fake mp4 video binary data")
+	mediaID, err := conn.UploadMedia(context.Background(), "test_token", "attempt-1", bytes.NewReader(videoData), "video/mp4")
+	if err != nil {
+		t.Fatalf("UploadMedia chunked failed: %v", err)
+	}
+
+	if mediaID != "video_12345" {
+		t.Errorf("expected media ID video_12345, got %s", mediaID)
+	}
+	if initCalled != 1 {
+		t.Errorf("expected 1 INIT call, got %d", initCalled)
+	}
+	if appendCalled < 1 {
+		t.Errorf("expected at least 1 APPEND call, got %d", appendCalled)
+	}
+	if finalizeCalled != 1 {
+		t.Errorf("expected 1 FINALIZE call, got %d", finalizeCalled)
+	}
+	if statusCalls != 2 {
+		t.Errorf("expected 2 STATUS calls, got %d", statusCalls)
+	}
+}
+
+func TestUploadMedia_ProcessingFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		command := r.URL.Query().Get("command")
+		if command == "" && r.Method == http.MethodPost {
+			_ = r.ParseMultipartForm(10 * 1024 * 1024)
+			command = r.FormValue("command")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch command {
+		case "INIT":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"video_fail"}}`))
+		case "APPEND":
+			w.WriteHeader(http.StatusNoContent)
+		case "FINALIZE":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"video_fail","processing_info":{"state":"failed","error":{"code":1,"name":"InvalidVideo","message":"Unsupported video codec"}}}}`))
+		default:
+			http.Error(w, "unknown", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	conn := &Connector{
+		mediaUploadURL: server.URL,
+		httpClient:     server.Client(),
+	}
+
+	_, err := conn.UploadMedia(context.Background(), "test_token", "attempt-1", strings.NewReader("video"), "video/mp4")
+	if err == nil {
+		t.Fatal("expected error on processing failure")
+	}
+	if connectors.ClassifyError(err) != connectors.ErrorPermanent {
+		t.Fatalf("expected ErrorPermanent, got %v", connectors.ClassifyError(err))
+	}
+	if !strings.Contains(err.Error(), "Unsupported video codec") {
+		t.Fatalf("expected error message to contain reason, got %v", err)
+	}
+}
+
+func TestUploadMedia_ContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		command := r.URL.Query().Get("command")
+		if command == "" && r.Method == http.MethodPost {
+			_ = r.ParseMultipartForm(10 * 1024 * 1024)
+			command = r.FormValue("command")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch command {
+		case "INIT":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"video_cancel"}}`))
+		case "APPEND":
+			w.WriteHeader(http.StatusNoContent)
+		case "FINALIZE":
+			w.WriteHeader(http.StatusOK)
+			// Return 10 seconds check_after_secs so test can cancel
+			_, _ = w.Write([]byte(`{"data":{"id":"video_cancel","processing_info":{"state":"pending","check_after_secs":10}}}`))
+		default:
+			http.Error(w, "unknown", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	conn := &Connector{
+		mediaUploadURL: server.URL,
+		httpClient:     server.Client(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := conn.UploadMedia(ctx, "test_token", "attempt-1", strings.NewReader("video data"), "video/mp4")
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation/deadline exceeded error, got %v", err)
+	}
+}
+
+func TestPublish_WithMediaIDsPayload(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &requestBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"99887766","text":"Post with photo"}}`))
+	}))
+	defer server.Close()
+
+	conn := &Connector{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+	}
+
+	url, postID, err := conn.Publish(
+		context.Background(),
+		"valid_token",
+		"attempt-1",
+		"Post with photo",
+		"1880028106020515840",
+		"1880028106020515841",
+	)
+	if err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	if postID != "99887766" {
+		t.Errorf("expected postID 99887766, got %s", postID)
+	}
+	if url != "https://x.com/i/web/status/99887766" {
+		t.Errorf("expected URL https://x.com/i/web/status/99887766, got %s", url)
+	}
+
+	if requestBody["text"] != "Post with photo" {
+		t.Errorf("expected text 'Post with photo', got %v", requestBody["text"])
+	}
+
+	mediaObj, ok := requestBody["media"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected media object in payload, got %v", requestBody["media"])
+	}
+
+	mediaIDs, ok := mediaObj["media_ids"].([]any)
+	if !ok || len(mediaIDs) != 2 {
+		t.Fatalf("expected 2 media_ids in payload, got %v", mediaObj["media_ids"])
+	}
+	if mediaIDs[0] != "1880028106020515840" || mediaIDs[1] != "1880028106020515841" {
+		t.Errorf("unexpected media_ids: %v", mediaIDs)
+	}
+}
+
+func TestPublish_WithoutMediaIDsPayload(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &requestBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"11223344","text":"Text only post"}}`))
+	}))
+	defer server.Close()
+
+	conn := &Connector{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+	}
+
+	_, _, err := conn.Publish(context.Background(), "valid_token", "attempt-1", "Text only post")
+	if err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	if requestBody["text"] != "Text only post" {
+		t.Errorf("expected text 'Text only post', got %v", requestBody["text"])
+	}
+	if _, exists := requestBody["media"]; exists {
+		t.Errorf("expected no 'media' field in payload, got %v", requestBody["media"])
+	}
+}
+
+func TestPublish_RejectsMoreThan4MediaIDs(t *testing.T) {
+	conn := New(TwitterConfig{})
+	_, _, err := conn.Publish(
+		context.Background(),
+		"valid_token",
+		"attempt-1",
+		"Caption",
+		"id1", "id2", "id3", "id4", "id5",
+	)
+	if err == nil {
+		t.Fatal("expected error when more than 4 media IDs are provided")
+	}
+	if connectors.ClassifyError(err) != connectors.ErrorPermanent {
+		t.Fatalf("expected ErrorPermanent, got %v", connectors.ClassifyError(err))
+	}
+	if !strings.Contains(err.Error(), "at most 4 media items") {
+		t.Fatalf("expected error message to mention at most 4 media items, got: %v", err)
+	}
+}
+
+

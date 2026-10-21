@@ -22,6 +22,7 @@ var (
 	ErrPostCannotBeRescheduled = errors.New("post cannot be rescheduled in its current status")
 	ErrInvalidScheduledTime    = errors.New("scheduled time must be in the future")
 	ErrPostCannotBeCancelled   = errors.New("post cannot be cancelled in its current status")
+	ErrPostCannotBeRetried     = errors.New("only FAILED or PARTIALLY_PUBLISHED posts can be retried")
 )
 
 type PostRepository struct {
@@ -320,7 +321,7 @@ func (r *PostRepository) RetryPost(
 	}
 
 	if status != "FAILED" && status != "PARTIALLY_PUBLISHED" {
-		return fmt.Errorf("post cannot be retried in status %s", status)
+		return ErrPostCannotBeRetried
 	}
 
 	generation++
@@ -513,6 +514,7 @@ func (r *PostRepository) CreatePost(
 
 	// Validate media if referenced
 	var mediaContentType *string
+	var mediaContentTypes []string
 	mediaIDsToCheck := input.MediaIDs
 	if len(mediaIDsToCheck) == 0 && input.MediaID != nil {
 		mediaIDsToCheck = []uuid.UUID{*input.MediaID}
@@ -546,6 +548,7 @@ func (r *PostRepository) CreatePost(
 			return nil, fmt.Errorf("media upload is not complete: %s (status: %s)", mID, uploadStatus)
 		}
 		mediaContentType = &mediaType
+		mediaContentTypes = append(mediaContentTypes, mediaType)
 		if input.MediaType == nil {
 			input.MediaType = &mediaType
 		}
@@ -579,14 +582,64 @@ func (r *PostRepository) CreatePost(
 				return nil, errors.New("YouTube publishing requires a video")
 			}
 		} else if p == "twitter" {
-			if input.MediaID != nil {
-				return nil, errors.New("Twitter/X media uploads are not supported yet")
+			// Twitter/X media constraints:
+			// A post may include up to 4 photos, 1 animated GIF, or 1 video.
+			// Mixing photos, animated GIFs, and videos is not permitted.
+			if len(mediaIDsToCheck) > 4 {
+				return nil, errors.New("Twitter/X posts can include up to 4 photos, 1 animated GIF, or 1 video")
 			}
-			if mediaContentType != nil {
-				ct := *mediaContentType
-				if !strings.HasPrefix(ct, "image/") && !strings.HasPrefix(ct, "video/") {
-					return nil, fmt.Errorf("unsupported media type for Twitter/X: %s", ct)
+
+			var (
+				numPhotos int
+				numGIFs   int
+				numVideos int
+			)
+
+			checkType := func(ct string) error {
+				switch {
+				case ct == "image/gif":
+					numGIFs++
+				case strings.HasPrefix(ct, "image/"):
+					numPhotos++
+				case strings.HasPrefix(ct, "video/"):
+					numVideos++
+				default:
+					return fmt.Errorf("unsupported media type for Twitter/X: %s", ct)
 				}
+				return nil
+			}
+
+			for _, ct := range mediaContentTypes {
+				if err := checkType(ct); err != nil {
+					return nil, err
+				}
+			}
+			if len(mediaContentTypes) == 0 {
+				if mediaContentType != nil {
+					if err := checkType(*mediaContentType); err != nil {
+						return nil, err
+					}
+				} else if input.MediaType != nil {
+					if err := checkType(*input.MediaType); err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			if numVideos > 1 {
+				return nil, errors.New("Twitter/X posts can include at most 1 video")
+			}
+			if numGIFs > 1 {
+				return nil, errors.New("Twitter/X posts can include at most 1 animated GIF")
+			}
+			if numVideos > 0 && (numPhotos > 0 || numGIFs > 0) {
+				return nil, errors.New("Twitter/X does not allow mixing videos with other media")
+			}
+			if numGIFs > 0 && (numPhotos > 0 || numVideos > 0) {
+				return nil, errors.New("Twitter/X does not allow mixing animated GIFs with other media")
+			}
+			if numPhotos > 4 {
+				return nil, errors.New("Twitter/X posts can include at most 4 photos")
 			}
 		}
 	}

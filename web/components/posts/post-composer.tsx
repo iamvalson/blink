@@ -27,6 +27,10 @@ import {
   type VideoMetadata,
   type VideoValidationResult,
 } from "@/features/posts/utils/video-validator";
+import {
+  validateXMediaConstraints,
+  xMediaKind,
+} from "@/features/posts/utils/x-media-validator";
 
 type SubmitPhase =
   | "idle"
@@ -122,6 +126,26 @@ export function PostComposer() {
   }, [selectedPlatforms, connectedPlatforms]);
 
   const isYouTubeSelected = resolvedSelectedPlatforms.includes("youtube");
+  const isXSelected = resolvedSelectedPlatforms.includes("twitter");
+
+  // X (Twitter) media constraints — compute live from current media list
+  const xMediaError = useMemo(() => {
+    if (!isXSelected || media.length === 0) return null;
+    return validateXMediaConstraints(media.map((m) => m.file.type));
+  }, [isXSelected, media]);
+
+  // Compute whether the "Add more media" button should be blocked when X is selected.
+  const xAddBlockedReason = useMemo((): string | null => {
+    if (!isXSelected || media.length === 0) return null;
+    const kinds = media.map((m) => xMediaKind(m.file.type));
+    const hasVideo = kinds.includes("video");
+    const hasGif = kinds.includes("gif");
+    const hasPhoto = kinds.includes("photo");
+    if (hasVideo) return "X allows at most 1 video per post. Remove the video to add different media.";
+    if (hasGif) return "X allows at most 1 animated GIF per post. Remove the GIF to add different media.";
+    if (hasPhoto && media.length >= 4) return "X allows at most 4 photos per post.";
+    return null;
+  }, [isXSelected, media]);
 
   const characterLimit = useMemo(() => {
     if (resolvedSelectedPlatforms.includes("twitter")) {
@@ -372,6 +396,12 @@ export function PostComposer() {
       }
     }
 
+    // X (Twitter) platform-specific media constraint check
+    if (isXSelected && xMediaError) {
+      toast.error(`X media: ${xMediaError.message}`);
+      return;
+    }
+
     const targets = resolvedSelectedPlatforms
       .map(
         (platform) =>
@@ -393,8 +423,7 @@ export function PostComposer() {
       .filter((id): id is string => Boolean(id));
     const primaryMediaId = mediaIds.length > 0 ? mediaIds[0] : null;
 
-    // Determine content_format:
-    // Only send youtube-specific format if youtube is the sole/primary target.
+    // Determine content_format:    // Only send youtube-specific format if youtube is the sole/primary target.
     const contentFormat: ContentFormat = isYouTubeSelected
       ? youtubeFormat
       : "VIDEO";
@@ -482,6 +511,12 @@ export function PostComposer() {
         toast.error("YouTube Video/Short scheduling requires a completed video upload.");
         return;
       }
+    }
+
+    // X (Twitter) platform-specific media constraint check
+    if (isXSelected && xMediaError) {
+      toast.error(`X media: ${xMediaError.message}`);
+      return;
     }
 
     const targets = resolvedSelectedPlatforms
@@ -650,7 +685,18 @@ export function PostComposer() {
               onUpload={handleUploadFile}
               onRemove={handleRemoveFile}
               disabled={isDisabled}
+              addBlockedReason={isXSelected ? xAddBlockedReason : null}
             />
+
+            {/* X (Twitter) media constraint violation inline card */}
+            {isXSelected && xMediaError && !isDisabled && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-xs text-destructive">
+                <svg xmlns="http://www.w3.org/2000/svg" className="mt-0.5 h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                <span>{xMediaError.message} Remove conflicting files to continue.</span>
+              </div>
+            )}
 
             {/* Video duration & aspect ratio validation card */}
             {isYouTubeSelected && (isValidatingVideo || videoValidation) && (

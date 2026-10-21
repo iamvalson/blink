@@ -22,7 +22,7 @@ func NewOAuthConfig(cfg TwitterConfig) *oauth2.Config {
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  cfg.CallbackURL,
-		Scopes:       []string{"tweet.read", "tweet.write", "users.read", "offline.access"},
+		Scopes:       []string{"tweet.read", "tweet.write", "users.read", "offline.access", "media.write"},
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://x.com/i/oauth2/authorize",
 			TokenURL: "https://api.x.com/2/oauth2/token",
