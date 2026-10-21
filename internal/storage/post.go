@@ -760,10 +760,6 @@ func (r *PostRepository) CreatePost(
 		}
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("create outbox event: %w", err)
-	}
-
 	// Store this response against the idempotency record
 	responseBody, err := json.Marshal(post)
 	if err != nil {
