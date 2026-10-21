@@ -194,3 +194,11 @@ func TestPublishAPIErrorWithMockServer(t *testing.T) {
 		t.Fatalf("expected 402 error, got %v", err)
 	}
 }
+
+func TestRealMediaUploadRejectsUnsupportedOperation(t *testing.T) {
+	conn := New(TwitterConfig{})
+	id, err := conn.UploadMedia(context.Background(), "token", "attempt", nil, "image/png")
+	if err == nil || id != "" || connectors.ClassifyError(err) != connectors.ErrorPermanent {
+		t.Fatalf("unsupported upload returned id=%q err=%v", id, err)
+	}
+}

@@ -13,9 +13,9 @@ No calculated delay exceeds one hour. The maximum delay does not extend the thre
 
 Connectors normalize platform responses into retryable, permanent, or ambiguous errors. Transient network/platform failures and HTTP 429/5xx responses are retryable. Validation, authorization, unsupported media, and other definitive 4xx failures are permanent. A timeout or lost response that may have reached the platform is ambiguous.
 
-Ambiguous outcomes remain durable as `UNKNOWN` and go through the existing reconciliation path before another publish is considered. A found publication completes the original attempt; confirmed absence is the only reconciliation result that permits publishing again. An unresolved result is never blindly republished.
+Ambiguous outcomes remain durable as `UNKNOWN` and go through the existing reconciliation path before another publish is considered. A found publication completes the original attempt. Other outcomes are retained as `UNKNOWN` with `MANUAL_REVIEW_REQUIRED`; this version does not automatically republish after reconciliation.
 
-Retry state is persisted as `RETRYING` with `error_class` and `next_retry_at`. The same `publication_attempt_id` is used for every delivery. Asynq schedules the next execution with `ProcessIn`, while `MaxRetry(0)` prevents Asynq's native retry counter from multiplying Blink's business attempts. Workers do not sleep while waiting.
+Retry state is persisted as `RETRYING` with `error_class` and `next_retry_at`. The same `publication_attempt_id` is used for every delivery. The retry state, failure history, and a target-specific outbox event are committed together. The dispatcher enqueues the event when `available_at` is due, and the worker checks `next_retry_at`. Asynq uses `MaxRetry(10)` for infrastructure failures; business failures are acknowledged only after their durable next action is saved. Workers do not sleep while waiting.
 
 ## Rate-limit awareness
 
@@ -30,7 +30,7 @@ This preserves server intent while keeping the business retry policy bounded. Th
 
 Twitter/X and YouTube each parse their own responses differently. For Twitter, a `429 Too Many Requests` response is normalized using the `Retry-After` and `x-rate-limit-reset` headers. For YouTube, quota/rate-limit conditions are recognized from `429` and quota-related `403` responses before they are treated as retryable. Other 4xx errors remain permanent unless they are a real quota/rate-limit condition.
 
-When a rate-limited publish is scheduled, Blink records the failure metadata in the attempt history and schedules the next Asynq delivery with `ProcessIn(delay)` rather than blocking the worker. This keeps the worker pool responsive while respecting the platform's `Retry-After`/reset guidance.
+When a rate-limited publish is scheduled, Blink records the failure metadata in the attempt history and persists an outbox event with a future `available_at` rather than blocking the worker. This keeps the worker pool responsive while respecting the platform's `Retry-After`/reset guidance.
 
 ```mermaid
 flowchart TD
@@ -43,7 +43,7 @@ flowchart TD
     F -->|No| H[Use exponential backoff]
     G --> I[Cap at 1 hour]
     H --> I
-    I --> J[Schedule delayed Asynq retry]
+    I --> J[Persist delayed outbox event]
     J --> K[Worker continues processing other jobs]
     K --> L[Retry publish]
 ```
@@ -65,8 +65,8 @@ sensitive values are redacted before persistence. Individual failure rows retain
 the history for each automatic attempt; the DLQ row is the final operator-facing
 summary.
 
-Asynq and Redis remain responsible for execution and retry scheduling, not
-historical failure storage. The database write happens before the worker
+PostgreSQL stores retry intent and failure history. Asynq and Redis deliver
+executions. The database write happens before the worker
 considers a terminal failure handled, so the record remains after the Asynq
 task disappears. If the write fails, the worker returns the error and logs
 context rather than silently losing the failure.
@@ -84,6 +84,11 @@ flowchart TD
 	L --> S[Durable terminal history]
 ```
 
-Future manual retry tooling should inspect the DLQ row, resolve the underlying
-problem, and start a new retry cycle with new attempt-history rows. It should
-not silently reset or reuse the completed automatic attempt count.
+Manual post retry resets only failed targets, increments the scheduling
+generation, and restarts the bounded attempt count. Successful targets remain
+untouched, and unknown outcomes cannot be manually retried through this route.
+The current history schema upserts by attempt and attempt number, so separate
+immutable histories for each manual retry cycle remain future work.
+
+See [Publishing recovery](publishing_reliability.md) for deployment requirements
+and isolated integration-test commands.

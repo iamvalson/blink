@@ -28,6 +28,21 @@ import (
 
 var mediaDownloadClient = &http.Client{Timeout: 5 * time.Minute}
 
+type publicationLocker interface {
+	AcquirePublishLock(
+		context.Context,
+		uuid.UUID,
+	) (*storage.PublicationRepository, func(), bool, error)
+}
+
+type publicationExecutionStore interface {
+	publicationStore
+	ClaimPostPublishing(context.Context, uuid.UUID, int) (bool, error)
+	RecomputePostStatus(context.Context, uuid.UUID) error
+}
+
+type acquirePublishLock func(context.Context, uuid.UUID) (publicationExecutionStore, func(), bool, error)
+
 type mediaStore interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 }
@@ -39,6 +54,7 @@ type mediaRepository interface {
 type PublishProcessor struct {
 	posts         *storage.PostRepository
 	publications  publicationStore
+	acquire       acquirePublishLock
 	connectors    map[string]connectors.PlatformConnector
 	encryptionKey string
 	scheduler     publishScheduler
@@ -96,7 +112,14 @@ func NewPublishProcessor(
 	if len(schedulers) > 0 {
 		scheduler = schedulers[0]
 	}
+	var acquire acquirePublishLock
+	if locker, ok := publicationsRepo.(publicationLocker); ok {
+		acquire = func(ctx context.Context, id uuid.UUID) (publicationExecutionStore, func(), bool, error) {
+			return locker.AcquirePublishLock(ctx, id)
+		}
+	}
 	return &PublishProcessor{
+		acquire:       acquire,
 		posts:         posts,
 		publications:  publicationsRepo,
 		connectors:    platformConnectors,
@@ -106,113 +129,119 @@ func NewPublishProcessor(
 }
 
 // ProcessPublishJob handles a POST_CREATED event and publishes to all targets
-func (p *PublishProcessor) ProcessPublishJob(ctx context.Context, task *asynq.Task) error {
+func (p *PublishProcessor) ProcessPublishJob(
+	ctx context.Context,
+	task *asynq.Task,
+) error {
 	job, err := jobs.ParsePublishJob(task.Payload())
 	if err != nil {
-		return fmt.Errorf("parse publish job: %w", err)
+		return fmt.Errorf("%w: invalid publish payload: %v", asynq.SkipRetry, err)
+	}
+	if job.SchedulingGeneration < 1 {
+		// The database recovery sweep will create a current-generation task.
+		return nil
 	}
 
-	jobID := ""
-	if id, ok := asynq.GetTaskID(ctx); ok {
-		jobID = id
+	if p.acquire == nil {
+		return errors.New("publication repository does not support worker locking")
 	}
-	contextLogger := logger.WithJobContext(jobID, job.PostID.String(), "", "", 0)
-	contextLogger.Info().Str("event", "publish_job_started").Str("status", "started").Msg("publish job started")
 
-	// Load post
-	post, err := p.publications.GetPostForPublishing(ctx, job.PostID)
+	repo, release, acquired, err := p.acquire(ctx, job.PostID)
 	if err != nil {
-		return fmt.Errorf("get post: %w", err)
+		return err
 	}
-	contextLogger = logger.WithJobContext(jobID, post.ID.String(), post.UserID.String(), "", 0)
-
-	// Check if post is in an eligible status for publishing
-	if post.Status != "QUEUED" && post.Status != "SCHEDULED" && post.Status != "PUBLISHING" {
-		contextLogger.Info().Str("event", "publish_job_skipped").Str("status", post.Status).Msg("post not in eligible status, skipping")
-		return nil
+	if !acquired {
+		// Another worker currently owns this post. Infrastructure retry
+		// will revisit this delivery.
+		return errors.New("post is already being processed")
 	}
+	defer release()
 
-	// Validate scheduling generation if job specified one (stale job rejection)
-	if job.SchedulingGeneration > 0 && post.SchedulingGeneration != job.SchedulingGeneration {
-		contextLogger.Info().
-			Int("job_gen", job.SchedulingGeneration).
-			Int("post_gen", post.SchedulingGeneration).
-			Str("event", "publish_job_stale_generation").
-			Msg("scheduling generation mismatch (job is stale), skipping")
-		return nil
-	}
-
-	// If post has a future scheduled time, verify it is due (allowing clock skew tolerance of 30 seconds)
-	if post.ScheduledAt != nil && post.ScheduledAt.After(time.Now().Add(30*time.Second)) {
-		contextLogger.Warn().
-			Time("scheduled_at", *post.ScheduledAt).
-			Str("event", "publish_job_not_due").
-			Msg("scheduled post is not yet due, skipping")
-		return nil
-	}
-
-	// Transition post to PUBLISHING status
-	if post.Status != "PUBLISHING" {
-		if err := p.updatePostStatus(ctx, post.ID, "PUBLISHING"); err != nil {
-			contextLogger.Warn().Err(err).Msg("failed to update post status to PUBLISHING")
-		}
-	}
-
-	// Get pending targets
-	targets, err := p.publications.GetPendingPostTargets(ctx, job.PostID)
+	claimed, err := repo.ClaimPostPublishing(
+		ctx, job.PostID, job.SchedulingGeneration,
+	)
 	if err != nil {
-		return fmt.Errorf("get pending targets: %w", err)
+		return err
+	}
+	if !claimed {
+		return nil // Cancelled, stale, terminal, or not due.
 	}
 
-	if len(targets) == 0 {
-		contextLogger.Warn().Str("event", "publish_job_no_targets").Str("status", "no_targets").Msg("no pending targets found")
-		return nil
+	// Do not modify the shared processor: workers run concurrently.
+	processor := *p
+	processor.publications = repo
+	// Use the connection already held by this job for persisted media reads.
+	// Otherwise all pool connections can be held by workers waiting for media.
+	if mediaRepo, ok := repo.(mediaRepository); ok && processor.mediaRepo != nil {
+		processor.mediaRepo = mediaRepo
 	}
 
-	// Publish to each target
-	var firstErr error
+	post, err := repo.GetPostForPublishing(ctx, job.PostID)
+	if err != nil {
+		return err
+	}
+
+	targets, err := repo.GetPendingPostTargets(ctx, post.ID)
+	if err != nil {
+		return err
+	}
 
 	for _, target := range targets {
-		platform, err := p.processTarget(ctx, post, &target)
+		if job.TargetID != nil && target.ID != *job.TargetID {
+			continue
+		}
+
+		attempt, err := repo.GetPublicationAttempt(ctx, target.ID)
 		if err != nil {
-			logError := contextLogger.With().Str("target_id", target.ID.String()).Logger()
-			logError.Error().Err(logger.RedactError(err)).Str("event", "publish_failed").Str("status", "failed").Msg("failed to publish to target")
-			metrics.JobFailed(platform)
-			if firstErr == nil {
-				firstErr = err
-			}
-			if publishClassification(err) == connectors.ErrorRetryable {
-				if scheduleErr := p.scheduleRetry(ctx, job.PostID, target.ID, task, err); scheduleErr != nil {
-					contextLogger.Error().Err(logger.RedactError(scheduleErr)).Str("event", "publish_retry_schedule_failed").Str("status", "failed").Msg("failed to schedule publish retry")
-					if firstErr == err {
-						firstErr = scheduleErr
-					}
-				}
-			} else if publishClassification(err) == connectors.ErrorAmbiguous {
-				if scheduleErr := p.scheduleReconciliation(ctx, job.PostID, target.ID); scheduleErr != nil && firstErr == err {
-					firstErr = scheduleErr
-				}
-			} else if publishClassification(err) == connectors.ErrorPermanent {
-				if permErr := p.recordPermanentFailure(ctx, job.PostID, target.ID, task, nil, err); permErr != nil {
-					contextLogger.Error().Err(logger.RedactError(permErr)).Str("event", "publish_permanent_record_failed").Str("status", "failed").Msg("failed to record permanent failure")
-				}
-			}
-		} else {
+			return err
+		}
+
+		if attempt.ErrorCode != nil &&
+			*attempt.ErrorCode == "MANUAL_REVIEW_REQUIRED" {
+			continue
+		}
+
+		if attempt.Status == "RETRYING" &&
+			attempt.NextRetryAt != nil &&
+			attempt.NextRetryAt.After(time.Now()) {
+			continue
+		}
+
+		platform, publishErr := processor.processTarget(ctx, post, &target)
+		if publishErr == nil {
 			metrics.JobSucceeded(platform)
+			continue
+		}
+
+		metrics.JobFailed(platform)
+		switch publishClassification(publishErr) {
+		case connectors.ErrorRetryable:
+			if err := processor.scheduleRetry(
+				ctx, post.ID, target.ID, task, publishErr,
+			); err != nil {
+				return errors.Join(publishErr, err)
+			}
+
+		case connectors.ErrorPermanent:
+			if err := processor.recordPermanentFailure(
+				ctx, post.ID, target.ID, task, nil, publishErr,
+			); err != nil {
+				return errors.Join(publishErr, err)
+			}
+
+		case connectors.ErrorAmbiguous:
+			if err := processor.scheduleReconciliation(
+				ctx, post.ID, target.ID,
+			); err != nil {
+				return errors.Join(publishErr, err)
+			}
+
+		default:
+			return publishErr
 		}
 	}
 
-	if firstErr != nil {
-		// Blink schedules business retries explicitly; returning nil prevents
-		// Asynq from creating a second retry sequence.
-		return nil
-	}
-
-	if err := p.updatePostStatus(ctx, job.PostID, "PUBLISHED"); err != nil {
-		contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_post_status_failed").Str("status", "failed").Msg("failed to update post status to PUBLISHED")
-	}
-
-	return nil
+	return repo.RecomputePostStatus(ctx, post.ID)
 }
 
 func (p *PublishProcessor) processTarget(ctx context.Context, post *model.Post, target *model.PostTarget) (string, error) {
@@ -263,6 +292,9 @@ func (p *PublishProcessor) publishToTarget(
 	platform := metrics.NormalizePlatform(account.Platform)
 
 	if _, err = auth.DecryptToken(account.AccessToken, p.encryptionKey); err != nil {
+		if recoveryRequired {
+			return p.requireManualReview(ctx, attempt.ID, "Credentials could not be decrypted for reconciliation")
+		}
 		if markErr := p.publications.MarkAttemptFailed(ctx, attempt.ID, "DECRYPTION_FAILED", err.Error()); markErr != nil {
 			contextLogger.Error().Err(logger.RedactError(markErr)).Str("event", "publish_failed").Str("status", "failed").Msg("failed to mark attempt failed")
 		}
@@ -273,6 +305,9 @@ func (p *PublishProcessor) publishToTarget(
 	connector, ok := p.connectors[account.Platform]
 	if !ok {
 		errMsg := fmt.Sprintf("no connector for platform: %s", account.Platform)
+		if recoveryRequired {
+			return p.requireManualReview(ctx, attempt.ID, errMsg)
+		}
 		if err := p.publications.MarkAttemptFailed(ctx, attempt.ID, "UNKNOWN_PLATFORM", errMsg); err != nil {
 			contextLogger.Error().Err(logger.RedactError(err)).Str("event", "publish_failed").Str("status", "failed").Msg("failed to mark attempt failed")
 		}
@@ -281,6 +316,9 @@ func (p *PublishProcessor) publishToTarget(
 
 	accessToken, refreshed, err := p.ensureAccessToken(ctx, account, connector)
 	if err != nil {
+		if recoveryRequired {
+			return p.requireManualReview(ctx, attempt.ID, "Credentials unavailable for reconciliation: "+redactSensitive(err.Error()))
+		}
 		_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", err.Error())
 		return newPublishError(connectors.ClassifyError(err), err)
 	}
@@ -300,34 +338,34 @@ func (p *PublishProcessor) publishToTarget(
 	// PROCESSING and UNKNOWN both mean the previous external call may have
 	// been accepted. Reconcile before allowing another publish request.
 	if recoveryRequired {
-		log.Info().Str("attempt_id", attempt.ID.String()).Msg("Reconciling ambiguous publication attempt")
+		reconciliation, recErr := connector.ReconcilePublish(
+			ctx,
+			accessToken,
+			account.PlatformUserID,
+			attempt.ID.String(),
+			caption,
+		)
 
-		reconciliation, recErr := connector.ReconcilePublish(ctx, accessToken, account.PlatformUserID, attempt.ID.String(), caption)
+		if recErr == nil &&
+			reconciliation.Outcome == connectors.ReconciliationFound {
+			if err := p.publications.MarkAttemptSucceeded(
+				ctx,
+				attempt.ID,
+				reconciliation.PlatformPostID,
+				reconciliation.PublicURL,
+			); err != nil {
+				return fmt.Errorf("persist reconciled success: %w", err)
+			}
+
+			return p.publications.MarkPostTargetPublished(ctx, target.ID)
+		}
+
+		reason := "Publication could not be confirmed. Review the platform before retrying."
 		if recErr != nil {
-			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "RECONCILIATION_FAILED", recErr.Error())
-			return fmt.Errorf("reconciliation error: %w", recErr)
+			reason = "Reconciliation failed: " + redactSensitive(recErr.Error())
 		}
 
-		switch reconciliation.Outcome {
-		case connectors.ReconciliationFound:
-			if err := p.publications.MarkAttemptSucceeded(ctx, attempt.ID, reconciliation.PlatformPostID, reconciliation.PublicURL); err != nil {
-				return fmt.Errorf("mark reconciled attempt succeeded: %w", err)
-			}
-			if err := p.publications.MarkPostTargetPublished(ctx, target.ID); err != nil {
-				return fmt.Errorf("mark target published: %w", err)
-			}
-			return nil
-		case connectors.ReconciliationUnknown:
-			_ = p.publications.MarkAttemptUnknown(ctx, attempt.ID, "RECONCILIATION_UNKNOWN", "platform could not prove whether the publication exists")
-			return fmt.Errorf("publication outcome remains unknown")
-		case connectors.ReconciliationNotFoundConfirmed:
-			if err := p.publications.ResetAttemptForRetry(ctx, attempt.ID); err != nil {
-				return fmt.Errorf("reset attempt after reconciliation: %w", err)
-			}
-			attempt.Status = "PENDING"
-		default:
-			return fmt.Errorf("unsupported reconciliation outcome: %q", reconciliation.Outcome)
-		}
+		return p.requireManualReview(ctx, attempt.ID, reason)
 	}
 
 	if attempt.Status == "PENDING" {
@@ -541,6 +579,15 @@ func (p *PublishProcessor) publishToTarget(
 	return nil
 }
 
+// A credential or reconciliation failure cannot prove that an earlier external
+// call failed. Keep the outcome unknown so manual post retry cannot duplicate it.
+func (p *PublishProcessor) requireManualReview(ctx context.Context, attemptID uuid.UUID, reason string) error {
+	if err := p.publications.MarkAttemptUnknown(ctx, attemptID, "MANUAL_REVIEW_REQUIRED", reason); err != nil {
+		return err
+	}
+	return newPublishError(connectors.ErrorAmbiguous, errors.New(reason))
+}
+
 func (p *PublishProcessor) ensureAccessToken(ctx context.Context, account *model.SocialAccount, connector connectors.PlatformConnector) (string, bool, error) {
 	accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
 	if err != nil {
@@ -620,61 +667,34 @@ func (p *PublishProcessor) refreshAccessToken(ctx context.Context, account *mode
 	return result.AccessToken, true, nil
 }
 
-func (p *PublishProcessor) scheduleRetry(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, cause error) error {
+func (p *PublishProcessor) scheduleRetry(
+	ctx context.Context,
+	postID, targetID uuid.UUID,
+	task *asynq.Task,
+	cause error,
+) error {
 	attempt, err := p.publications.GetPublicationAttempt(ctx, targetID)
 	if err != nil {
 		return err
 	}
+
 	if !retryPolicy.ShouldRetry(cause, attempt.AttemptCount) {
-		return p.recordPermanentFailure(ctx, postID, targetID, task, attempt, cause)
+		return p.recordPermanentFailure(
+			ctx, postID, targetID, task, attempt, cause,
+		)
 	}
-	if p.scheduler == nil {
-		return fmt.Errorf("retry scheduler is not configured")
-	}
-	var platform string
-	if target, account, getErr := p.publications.GetPostTargetWithSocialAccount(ctx, targetID); getErr == nil {
-		platform = account.Platform
-		_ = target
-	}
-	jobID := ""
-	if id, ok := asynq.GetTaskID(ctx); ok {
-		jobID = id
-	}
-	contextLogger := logger.WithJobContext(jobID, postID.String(), "", platform, attempt.AttemptCount)
+
 	delay := retryPolicy.ResolveRetryDelay(cause, attempt.AttemptCount)
-	nextRetryAt := time.Now().Add(delay)
-	if err := p.publications.MarkAttemptRetrying(ctx, attempt.ID, "PUBLISH_RETRY", string(publishClassification(cause)), cause.Error(), nextRetryAt); err != nil {
-		return err
-	}
-	retryTask, err := jobs.NewPublishTask(postID)
-	if err != nil {
-		return err
-	}
-	if _, err := p.scheduler.Enqueue(retryTask, asynq.ProcessIn(delay), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
-		metrics.QueueFailure("scheduling")
-		return fmt.Errorf("enqueue publish retry: %w", err)
-	}
-	metrics.JobRetried(platform)
-	var rateLimitErr *connectors.RateLimitError
-	if errors.As(cause, &rateLimitErr) {
-		contextLogger.Warn().
-			Str("event", "rate_limit_detected").
-			Str("status", "retrying").
-			Str("error", logger.RedactSecrets(rateLimitErr.Message)).
-			Int("http_status", rateLimitErr.StatusCode).
-			Dur("retry_after", rateLimitErr.RetryAfter).
-			Dur("retry_delay", delay).
-			Time("retry_at", nextRetryAt).
-			Msg("rate limit detected, retry scheduled")
-	}
-	contextLogger.Info().
-		Str("event", "publish_retry_scheduled").
-		Str("status", "retrying").
-		Err(logger.RedactError(cause)).
-		Dur("retry_delay", delay).
-		Time("retry_at", nextRetryAt).
-		Msg("publish retry scheduled")
-	return nil
+
+	// This method now persists the retry AND its outbox event atomically.
+	return p.publications.MarkAttemptRetrying(
+		ctx,
+		attempt.ID,
+		"PUBLISH_RETRY",
+		string(publishClassification(cause)),
+		redactSensitive(cause.Error()),
+		time.Now().Add(delay),
+	)
 }
 
 func (p *PublishProcessor) recordPermanentFailure(ctx context.Context, postID, targetID uuid.UUID, task *asynq.Task, attempt *model.PublicationAttempt, cause error) error {
@@ -763,27 +783,43 @@ func redactSensitive(value string) string {
 	return sensitiveValuePattern.ReplaceAllString(value, `${1}$2[REDACTED]`)
 }
 
-func (p *PublishProcessor) scheduleReconciliation(ctx context.Context, postID, targetID uuid.UUID) error {
-	if p.scheduler == nil {
-		return fmt.Errorf("reconciliation scheduler is not configured")
-	}
+func (p *PublishProcessor) scheduleReconciliation(
+	ctx context.Context,
+	postID, targetID uuid.UUID,
+) error {
 	attempt, err := p.publications.GetPublicationAttempt(ctx, targetID)
 	if err != nil {
 		return err
 	}
-	if attempt.Status != "UNKNOWN" || attempt.ErrorCode == nil || !strings.HasSuffix(*attempt.ErrorCode, "OUTCOME_UNKNOWN") {
+
+	if attempt.ErrorCode != nil &&
+		*attempt.ErrorCode == "MANUAL_REVIEW_REQUIRED" {
 		return nil
 	}
-	task, err := jobs.NewPublishTask(postID)
+
+	if attempt.Status != "UNKNOWN" {
+		// Preserve infrastructure retries when durable unknown state
+		// could not be recorded.
+		return errors.New("ambiguous attempt has not been persisted as UNKNOWN")
+	}
+
+	post, err := p.publications.GetPostForPublishing(ctx, postID)
 	if err != nil {
 		return err
 	}
-	if _, err := p.scheduler.Enqueue(task, asynq.ProcessIn(0), asynq.MaxRetry(0), asynq.Timeout(5*time.Minute)); err != nil {
-		metrics.QueueFailure("scheduling")
-		return fmt.Errorf("enqueue reconciliation: %w", err)
+
+	repo, ok := p.publications.(interface {
+		QueueReconciliation(
+			context.Context, uuid.UUID, uuid.UUID, int,
+		) error
+	})
+	if !ok {
+		return errors.New("durable reconciliation is not supported")
 	}
-	log.Info().Str("publication_attempt_id", attempt.ID.String()).Str("post_id", postID.String()).Msg("scheduling publication reconciliation")
-	return nil
+
+	return repo.QueueReconciliation(
+		ctx, postID, targetID, post.SchedulingGeneration,
+	)
 }
 
 func (p *PublishProcessor) updatePostStatus(ctx context.Context, postID uuid.UUID, status string) error {

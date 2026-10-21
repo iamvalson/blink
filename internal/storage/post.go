@@ -16,8 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-
-
 var (
 	ErrPostNotFound            = errors.New("post not found")
 	ErrPostDeleteForbidden     = errors.New("post cannot be deleted while publishing is in progress")
@@ -295,69 +293,120 @@ func (r *PostRepository) DeletePost(ctx context.Context, userID, postID uuid.UUI
 
 // RetryPost requeues a failed post for publishing by resetting target/attempt state.
 // Only FAILED posts can be retried.
-func (r *PostRepository) RetryPost(ctx context.Context, userID, postID uuid.UUID) error {
+func (r *PostRepository) RetryPost(
+	ctx context.Context,
+	userID, postID uuid.UUID,
+) error {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var status string
-	err = tx.QueryRow(ctx,
-		`SELECT status FROM posts WHERE id = $1 AND user_id = $2`,
-		postID, userID,
-	).Scan(&status)
+	var generation int
+
+	err = tx.QueryRow(ctx, `
+		SELECT status, scheduling_generation
+		FROM posts
+		WHERE id = $1 AND user_id = $2
+		FOR UPDATE
+	`, postID, userID).Scan(&status, &generation)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrPostNotFound
+	}
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrPostNotFound
-		}
-		return fmt.Errorf("get post status: %w", err)
-	}
-	if status != "FAILED" {
-		return fmt.Errorf("only FAILED posts can be retried (current status: %s)", status)
+		return err
 	}
 
-	// Reset post to QUEUED
-	if _, err := tx.Exec(ctx,
-		`UPDATE posts SET status = 'QUEUED', updated_at = NOW() WHERE id = $1`,
-		postID,
-	); err != nil {
-		return fmt.Errorf("reset post status: %w", err)
+	if status != "FAILED" && status != "PARTIALLY_PUBLISHED" {
+		return fmt.Errorf("post cannot be retried in status %s", status)
 	}
 
-	// Reset failed targets to PENDING
-	if _, err := tx.Exec(ctx,
-		`UPDATE post_targets SET status = 'PENDING', updated_at = NOW() WHERE post_id = $1 AND status = 'FAILED'`,
-		postID,
-	); err != nil {
-		return fmt.Errorf("reset targets: %w", err)
-	}
+	generation++
 
-	// Reset failed publication attempts to PENDING
-	if _, err := tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE publication_attempts pa
-		SET status = 'PENDING', error_code = NULL, error_message = NULL, error_class = NULL,
-		    next_retry_at = NULL, updated_at = NOW()
+		SET status = 'PENDING',
+		    attempt_count = 0,
+		    error_code = NULL,
+		    error_class = NULL,
+		    error_message = NULL,
+		    next_retry_at = NULL,
+		    started_at = NULL,
+		    completed_at = NULL,
+		    updated_at = NOW()
 		FROM post_targets pt
 		WHERE pa.post_target_id = pt.id
 		  AND pt.post_id = $1
-		  AND pa.status IN ('FAILED', 'UNKNOWN')
-	`, postID); err != nil {
-		return fmt.Errorf("reset attempts: %w", err)
+		  AND pt.status = 'FAILED'
+		  AND pa.status = 'FAILED'
+	`, postID)
+	if err != nil {
+		return err
 	}
 
-	// Re-insert outbox event for the post to trigger the worker
-	payload, _ := json.Marshal(map[string]interface{}{"post_id": postID})
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status)
+	_, err = tx.Exec(ctx, `
+		UPDATE post_targets pt
+		SET status = 'PENDING'
+		WHERE pt.post_id = $1
+		  AND pt.status = 'FAILED'
+		  AND EXISTS (
+			SELECT 1 FROM publication_attempts pa
+			WHERE pa.post_target_id = pt.id AND pa.status = 'PENDING'
+		  )
+	`, postID)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE posts
+		SET status = 'QUEUED',
+		    scheduled_at = NULL,
+		    scheduling_generation = $2,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, postID, generation)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE outbox_events
+		SET status = 'FAILED',
+		    claim_token = NULL,
+		    locked_until = NULL,
+		    last_error = 'superseded by manual retry',
+		    updated_at = NOW()
+		WHERE aggregate_type = 'post'
+		  AND aggregate_id = $1
+		  AND status IN ('PENDING', 'PROCESSING')
+	`, postID)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"post_id":               postID,
+		"scheduling_generation": generation,
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_events (
+			aggregate_type, aggregate_id, event_type, payload, status
+		)
 		VALUES ('post', $1, 'POST_CREATED', $2, 'PENDING')
-	`, postID, payload); err != nil {
-		return fmt.Errorf("insert retry outbox event: %w", err)
+	`, postID, payload)
+	if err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)
 }
-
 
 // CreatePost creates a post, its targets, publication attempts, idempotency record and outbox event in one transaction
 func (r *PostRepository) CreatePost(
@@ -366,6 +415,17 @@ func (r *PostRepository) CreatePost(
 	idempotencyKey string,
 	input model.CreatePostInput,
 ) (*model.Post, error) {
+	if len(input.MediaIDs) > 1 {
+		return nil, errors.New("only one media attachment is supported")
+	}
+	if len(input.MediaIDs) == 1 {
+		if input.MediaID != nil && *input.MediaID != input.MediaIDs[0] {
+			return nil, errors.New("media_id and media_ids must reference the same media")
+		}
+		id := input.MediaIDs[0]
+		input.MediaID = &id
+	}
+
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -376,7 +436,7 @@ func (r *PostRepository) CreatePost(
 	}()
 
 	requestHash, err := hashCreatePostRequest(input)
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("hash create post request: %w", err)
 	}
 
@@ -403,7 +463,7 @@ func (r *PostRepository) CreatePost(
 		`, userID, idempotencyKey, requestHash,
 	).Scan(&idempotencyID)
 
-	if err != nil{
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return r.handleExistingIdempotencyKey(
 				ctx,
@@ -416,8 +476,6 @@ func (r *PostRepository) CreatePost(
 
 		return nil, fmt.Errorf("create idempotency key: %w", err)
 	}
-
-
 
 	// Validate all social accounts belong to the user and gather platforms
 	var targetPlatforms []string
@@ -521,6 +579,9 @@ func (r *PostRepository) CreatePost(
 				return nil, errors.New("YouTube publishing requires a video")
 			}
 		} else if p == "twitter" {
+			if input.MediaID != nil {
+				return nil, errors.New("Twitter/X media uploads are not supported yet")
+			}
 			if mediaContentType != nil {
 				ct := *mediaContentType
 				if !strings.HasPrefix(ct, "image/") && !strings.HasPrefix(ct, "video/") {
@@ -614,9 +675,8 @@ func (r *PostRepository) CreatePost(
 		return nil, fmt.Errorf("create post: %w", err)
 	}
 
-
 	// Create post targets
-	for _, socialAccountID := range input.Targets{
+	for _, socialAccountID := range input.Targets {
 		var postTargetID uuid.UUID
 
 		err := tx.QueryRow(
@@ -637,11 +697,9 @@ func (r *PostRepository) CreatePost(
 			socialAccountID,
 		).Scan(&postTargetID)
 
-		if err != nil { 
-			return nil, fmt.Errorf("create post target: %w", err) 
+		if err != nil {
+			return nil, fmt.Errorf("create post target: %w", err)
 		}
-
-
 
 		// Create publication attempt
 		_, err = tx.Exec(
@@ -660,12 +718,10 @@ func (r *PostRepository) CreatePost(
 			`,
 			postTargetID,
 		)
-		if err != nil { 
-			return nil, fmt.Errorf("create publication attempt: %w", err) 
+		if err != nil {
+			return nil, fmt.Errorf("create publication attempt: %w", err)
 		}
 	}
-
-
 
 	// Create outbox event only for immediately queued posts
 	if initialStatus == model.StatusQueued {
@@ -704,15 +760,13 @@ func (r *PostRepository) CreatePost(
 		}
 	}
 
-	if err != nil { 
-		return nil, fmt.Errorf("create outbox event: %w", err) 
+	if err != nil {
+		return nil, fmt.Errorf("create outbox event: %w", err)
 	}
-
-
 
 	// Store this response against the idempotency record
 	responseBody, err := json.Marshal(post)
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("marshal idempotency response: %w", err)
 	}
 
@@ -734,24 +788,17 @@ func (r *PostRepository) CreatePost(
 		idempotencyID,
 	)
 
-	if err != nil { 
-		return nil, fmt.Errorf("complete idempotency key: %w", err) 
+	if err != nil {
+		return nil, fmt.Errorf("complete idempotency key: %w", err)
 	}
 
-
-
-
 	// Commit Transaction
-	if err := tx.Commit(ctx); err != nil{
+	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return &post, nil
 }
-
-
-
-
 
 func (r *PostRepository) handleExistingIdempotencyKey(
 	ctx context.Context,
@@ -791,23 +838,19 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 		&record.ExpiresAt,
 	)
 
-
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("get existing idempotency key: %w", err)
 	}
 
-
 	// The same key cannot be used for a different request
-	if record.RequestHash != requestHash{
-		return nil, errors.New( "idempotency key has already been used with a different request", )
+	if record.RequestHash != requestHash {
+		return nil, errors.New("idempotency key has already been used with a different request")
 	}
-
 
 	// The original request is still being processed
 	if record.Status == "PROCESSING" {
-		return nil, errors.New( "request with this idempotency key is already being processed", )
+		return nil, errors.New("request with this idempotency key is already being processed")
 	}
-
 
 	// The request already completed
 	if record.Status == "COMPLETED" && record.ResourceType != nil && *record.ResourceType == "post" && record.ResourceID != nil {
@@ -858,7 +901,6 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 
 	return nil, errors.New("invalid idempotency state")
 }
-
 
 func hashCreatePostRequest(input model.CreatePostInput) (string, error) {
 	data := struct {
@@ -919,7 +961,8 @@ func (r *PostRepository) ReschedulePost(ctx context.Context, userID, postID uuid
 	}
 
 	// Reject if post is actively publishing or already published
-	if currentStatus == model.StatusPublishing || currentStatus == model.StatusPublished {
+	if currentStatus != model.StatusScheduled &&
+		currentStatus != model.StatusQueued {
 		return nil, ErrPostCannotBeRescheduled
 	}
 
@@ -971,7 +1014,8 @@ func (r *PostRepository) CancelSchedule(ctx context.Context, userID, postID uuid
 		return nil, fmt.Errorf("query post for cancel: %w", err)
 	}
 
-	if currentStatus == model.StatusPublishing || currentStatus == model.StatusPublished {
+	if currentStatus != model.StatusScheduled &&
+		currentStatus != model.StatusQueued {
 		return nil, ErrPostCannotBeCancelled
 	}
 
@@ -1274,6 +1318,9 @@ func (r *PostRepository) ClaimDueScheduledPosts(ctx context.Context, limit int) 
 		claimed = append(claimed, p)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate due posts: %w", err)
+	}
 
 	if len(claimed) == 0 {
 		return nil, nil

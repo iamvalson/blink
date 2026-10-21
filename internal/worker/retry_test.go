@@ -79,3 +79,13 @@ func TestRetryPolicyCapsRateLimitDelayAtOneHour(t *testing.T) {
 		t.Fatalf("ResolveRetryDelay = %s exceeds %s", got, MaxRetryDelay)
 	}
 }
+
+func TestRetryPolicyRespectsPublishErrorClassification(t *testing.T) {
+	cause := newPublishError(connectors.ErrorRetryable, errors.New("storage read temporarily failed"))
+	if !(RetryPolicy{}).ShouldRetry(cause, 1) {
+		t.Fatal("explicit retryable classification was lost")
+	}
+	if (RetryPolicy{}).ShouldRetry(cause, MaxAttempts) {
+		t.Fatal("business retry limit exceeded")
+	}
+}

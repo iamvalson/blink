@@ -105,6 +105,7 @@ func (s *recoveryStore) UpdatePostStatus(_ context.Context, _ uuid.UUID, status 
 
 func (s *recoveryStore) RecordPermanentFailure(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID, _ *string, _ string, _ string, _ int, _ string, _ string, _ string, _ string, _ []byte) error {
 	s.attempt.Status = "FAILED"
+	s.target.Status = "FAILED"
 	return nil
 }
 
@@ -159,7 +160,7 @@ func TestPublishToTargetReconcilesAmbiguousResultWithoutRepublishing(t *testing.
 	}
 
 	store := &recoveryStore{
-		post:    &model.Post{ID: postID, Caption: stringPtr("hello"), Status: "QUEUED"},
+		post:    &model.Post{ID: postID, Caption: stringPtr("hello"), Status: "QUEUED", SchedulingGeneration: 1},
 		target:  model.PostTarget{ID: targetID, PostID: postID, Status: "PENDING"},
 		account: model.SocialAccount{Platform: connectors.PlatformTwitter, PlatformUserID: "user-123", AccessToken: encryptedToken},
 		attempt: model.PublicationAttempt{ID: attemptID, PostTargetID: targetID, Status: "PENDING", CreatedAt: time.Now()},
@@ -476,7 +477,7 @@ func runCrashWorkerChild(t *testing.T) {
 	targetID := uuid.MustParse(os.Getenv("BLINK_TEST_TARGET_ID"))
 	store := &crashFileStore{
 		path:    os.Getenv("BLINK_CRASH_STATE"),
-		post:    &model.Post{ID: postID, Caption: stringPtr("hello"), Status: "QUEUED"},
+		post:    &model.Post{ID: postID, Caption: stringPtr("hello"), Status: "QUEUED", SchedulingGeneration: 1},
 		target:  model.PostTarget{ID: targetID, PostID: postID, Status: "PENDING"},
 		account: model.SocialAccount{Platform: connectors.PlatformTwitter, PlatformUserID: "user-123", AccessToken: os.Getenv("BLINK_TEST_TOKEN")},
 	}
@@ -581,7 +582,7 @@ func TestPublishToTarget_YouTubeMissingVideo_PermanentFailureNoReconciliation(t 
 	}
 
 	store := &recoveryStore{
-		post:    &model.Post{ID: postID, Caption: stringPtr("hello"), Status: "QUEUED"}, // no MediaURL and no MediaID
+		post:    &model.Post{ID: postID, Caption: stringPtr("hello"), Status: "QUEUED", SchedulingGeneration: 1}, // no MediaURL and no MediaID
 		target:  model.PostTarget{ID: targetID, PostID: postID, Status: "PENDING"},
 		account: model.SocialAccount{Platform: connectors.PlatformYoutube, PlatformUserID: "channel-123", AccessToken: encryptedToken},
 		attempt: model.PublicationAttempt{ID: attemptID, PostTargetID: targetID, Status: "PENDING", CreatedAt: time.Now()},
@@ -594,7 +595,8 @@ func TestPublishToTarget_YouTubeMissingVideo_PermanentFailureNoReconciliation(t 
 		connectors.PlatformYoutube: ytConnector,
 	}, key, scheduler)
 
-	task, _ := jobs.NewPublishTask(postID)
+	processor.acquire = fakeAcquire(store)
+	task, _ := jobs.NewPublishTask(postID, 1)
 	err = processor.ProcessPublishJob(context.Background(), task)
 	if err != nil {
 		t.Fatalf("ProcessPublishJob returned error: %v", err)
@@ -628,7 +630,7 @@ func TestPublishToTarget_WithPersistentMedia_Success(t *testing.T) {
 	}
 
 	store := &recoveryStore{
-		post:    &model.Post{ID: postID, Caption: stringPtr("video post"), MediaID: &mediaID, Status: "QUEUED"},
+		post:    &model.Post{ID: postID, Caption: stringPtr("video post"), MediaID: &mediaID, Status: "QUEUED", SchedulingGeneration: 1},
 		target:  model.PostTarget{ID: targetID, PostID: postID, Status: "PENDING"},
 		account: model.SocialAccount{Platform: connectors.PlatformYoutube, PlatformUserID: "channel-123", AccessToken: encryptedToken},
 		attempt: model.PublicationAttempt{ID: attemptID, PostTargetID: targetID, Status: "PENDING", CreatedAt: time.Now()},
@@ -649,7 +651,8 @@ func TestPublishToTarget_WithPersistentMedia_Success(t *testing.T) {
 		connectors.PlatformYoutube: ytConnector,
 	}, key).WithMediaStore(mediaRepo, mediaStore)
 
-	task, _ := jobs.NewPublishTask(postID)
+	processor.acquire = fakeAcquire(store)
+	task, _ := jobs.NewPublishTask(postID, 1)
 	err = processor.ProcessPublishJob(context.Background(), task)
 	if err != nil {
 		t.Fatalf("ProcessPublishJob returned error: %v", err)
@@ -666,5 +669,138 @@ func TestPublishToTarget_WithPersistentMedia_Success(t *testing.T) {
 	}
 	if store.target.Status != "PUBLISHED" {
 		t.Fatalf("expected target status PUBLISHED, got %s", store.target.Status)
+	}
+}
+
+func fakeAcquire(store *recoveryStore) acquirePublishLock {
+	return func(context.Context, uuid.UUID) (publicationExecutionStore, func(), bool, error) {
+		return store, func() {}, true, nil
+	}
+}
+
+func (s *recoveryStore) ClaimPostPublishing(_ context.Context, id uuid.UUID, generation int) (bool, error) {
+	if s.post.ID != id || s.post.SchedulingGeneration != generation ||
+		(s.post.Status != "QUEUED" && s.post.Status != "PUBLISHING" && s.post.Status != "SCHEDULED") ||
+		(s.post.ScheduledAt != nil && s.post.ScheduledAt.After(time.Now())) {
+		return false, nil
+	}
+	s.post.Status = "PUBLISHING"
+	return true, nil
+}
+
+func (s *recoveryStore) RecomputePostStatus(context.Context, uuid.UUID) error {
+	switch s.target.Status {
+	case "PUBLISHED", "FAILED":
+		s.post.Status = s.target.Status
+	}
+	return nil
+}
+
+type failingExecutionStore struct {
+	*recoveryStore
+	persistErr error
+}
+
+func (s *failingExecutionStore) MarkAttemptRetrying(context.Context, uuid.UUID, string, string, string, time.Time) error {
+	return s.persistErr
+}
+func (s *failingExecutionStore) RecordPermanentFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *string, string, string, int, string, string, string, string, []byte) error {
+	return s.persistErr
+}
+func (s *failingExecutionStore) QueueReconciliation(context.Context, uuid.UUID, uuid.UUID, int) error {
+	return s.persistErr
+}
+
+type failureConnector struct {
+	crashRecoveryConnector
+	cause error
+}
+
+func (c *failureConnector) Publish(context.Context, string, string, string, ...string) (string, string, error) {
+	c.publishCalls++
+	return "", "", c.cause
+}
+
+func TestPublicationPersistenceFailureIsNotAcknowledged(t *testing.T) {
+	for _, class := range []connectors.ErrorClass{connectors.ErrorRetryable, connectors.ErrorPermanent, connectors.ErrorAmbiguous} {
+		t.Run(string(class), func(t *testing.T) {
+			key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+			token, err := auth.EncryptToken("token", key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			postID, targetID := uuid.New(), uuid.New()
+			dbErr := errors.New("database unavailable")
+			base := &recoveryStore{post: &model.Post{ID: postID, Status: "QUEUED", SchedulingGeneration: 1}, target: model.PostTarget{ID: targetID, PostID: postID, Status: "PENDING"}, account: model.SocialAccount{Platform: "twitter", AccessToken: token}, attempt: model.PublicationAttempt{ID: uuid.New(), PostTargetID: targetID, Status: "PENDING"}}
+			store := &failingExecutionStore{recoveryStore: base, persistErr: dbErr}
+			connector := &failureConnector{cause: connectors.NewClassifiedError(class, "TEST", errors.New("platform failure"))}
+			processor := NewPublishProcessor(nil, store, map[string]connectors.PlatformConnector{"twitter": connector}, key)
+			processor.acquire = func(context.Context, uuid.UUID) (publicationExecutionStore, func(), bool, error) {
+				return store, func() {}, true, nil
+			}
+			task, err := jobs.NewPublishTask(postID, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := processor.ProcessPublishJob(context.Background(), task); !errors.Is(err, dbErr) {
+				t.Fatalf("persistence failure acknowledged: %v", err)
+			}
+		})
+	}
+}
+
+func TestTargetRetryDoesNotPublishAnotherTarget(t *testing.T) {
+	id, target, other := uuid.New(), uuid.New(), uuid.New()
+	store := &recoveryStore{post: &model.Post{ID: id, Status: "QUEUED", SchedulingGeneration: 1}, target: model.PostTarget{ID: target, PostID: id, Status: "PENDING"}, attempt: model.PublicationAttempt{Status: "PENDING"}}
+	connector := &failureConnector{}
+	processor := NewPublishProcessor(nil, store, map[string]connectors.PlatformConnector{"twitter": connector}, "")
+	processor.acquire = fakeAcquire(store)
+	task, err := jobs.NewPublishTaskForJob(jobs.PublishJob{PostID: id, TargetID: &other, SchedulingGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.ProcessPublishJob(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if store.attempt.Status != "PENDING" || connector.publishCalls != 0 {
+		t.Fatal("targeted retry processed another target")
+	}
+}
+
+func TestRecoveryCredentialFailurePreservesUnknownOutcome(t *testing.T) {
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	encrypted, err := auth.EncryptToken("token", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, token, platform string
+		expired               bool
+	}{
+		{"expired without refresh token", encrypted, "twitter", true},
+		{"corrupt encrypted token", "invalid", "twitter", false},
+		{"missing connector", encrypted, "missing", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, target := uuid.New(), uuid.New()
+			store := &recoveryStore{post: &model.Post{ID: id, Status: "PUBLISHING", SchedulingGeneration: 1}, target: model.PostTarget{ID: target, PostID: id, Status: "PENDING"}, account: model.SocialAccount{Platform: tc.platform, AccessToken: tc.token}, attempt: model.PublicationAttempt{ID: uuid.New(), PostTargetID: target, Status: "PROCESSING", AttemptCount: 1}}
+			if tc.expired {
+				past := time.Now().Add(-time.Hour)
+				store.account.ExpiresAt = &past
+			}
+			conn := &crashRecoveryConnector{}
+			processor := NewPublishProcessor(nil, store, map[string]connectors.PlatformConnector{"twitter": conn}, key)
+			processor.acquire = fakeAcquire(store)
+			task, err := jobs.NewPublishTask(id, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := processor.ProcessPublishJob(context.Background(), task); err != nil {
+				t.Fatal(err)
+			}
+			if store.attempt.Status != "UNKNOWN" || store.attempt.ErrorCode == nil || *store.attempt.ErrorCode != "MANUAL_REVIEW_REQUIRED" || store.target.Status != "PENDING" || conn.publishCalls != 0 {
+				t.Fatalf("uncertain publication became retryable: %+v", store.attempt)
+			}
+		})
 	}
 }
