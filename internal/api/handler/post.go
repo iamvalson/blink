@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -71,20 +70,13 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
 	// Create post
 	post, err := h.postService.CreatePost(r.Context(), userID, idempotencyKey, input)
 	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("user_id", userID.String()).
-			Msg("Post creation rejected")
-
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "requires a video") ||
-			strings.Contains(errMsg, "media") ||
-			strings.Contains(errMsg, "target") ||
-			strings.Contains(errMsg, "caption") ||
-			strings.Contains(errMsg, "idempotency") ||
-			strings.Contains(errMsg, "content_format") ||
-			strings.Contains(errMsg, "invalid content") {
-			http.Error(w, errMsg, http.StatusBadRequest)
+		if errors.Is(err, service.ErrPostValidation) {
+			log.Warn().
+				Err(err).
+				Str("user_id", userID.String()).
+				Msg("Post creation rejected: validation error")
+			// Unwrap to surface the human-readable detail, not the sentinel wrapper.
+			http.Error(w, errors.Unwrap(err).Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -274,9 +266,8 @@ func (h *PostHandler) RetryPost(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Post not found", http.StatusNotFound)
 			return
 		}
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "only FAILED posts") {
-			http.Error(w, errMsg, http.StatusConflict)
+		if errors.Is(err, service.ErrPostCannotBeRetried) {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		log.Error().Err(err).Str("user_id", userID.String()).Str("post_id", postID.String()).Msg("Failed to retry post")

@@ -59,3 +59,20 @@ func TestCORSOptionsPreflight(t *testing.T) {
 		t.Errorf("expected Access-Control-Allow-Credentials to be 'true', got %q", allowCredentials)
 	}
 }
+
+func TestCORSOptionsPreflightIncludesLastEventID(t *testing.T) {
+	origins := []string{"http://localhost:3000"}
+	router := NewRouter(nil, nil, nil, "", "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/posts/123/status", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "Last-Event-ID")
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK && resp.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight status 200 or 204, got %d", resp.Code)
+	}
+}

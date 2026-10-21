@@ -804,3 +804,102 @@ func TestRecoveryCredentialFailurePreservesUnknownOutcome(t *testing.T) {
 		})
 	}
 }
+
+type mockXConnectorWithUploadFailure struct {
+	uploadCalled  bool
+	publishCalled bool
+}
+
+func (m *mockXConnectorWithUploadFailure) Authenticate(ctx context.Context, params connectors.AuthParams) (connectors.AuthResult, error) {
+	return connectors.AuthResult{}, nil
+}
+
+func (m *mockXConnectorWithUploadFailure) UploadMedia(ctx context.Context, token string, attemptID string, media io.Reader, mediaType string) (string, error) {
+	m.uploadCalled = true
+	return "", connectors.NewClassifiedError(connectors.ErrorPermanent, "UPLOAD_FAILED", errors.New("simulated upload failure"))
+}
+
+func (m *mockXConnectorWithUploadFailure) Publish(ctx context.Context, token string, attemptID string, caption string, mediaIDs ...string) (string, string, error) {
+	m.publishCalled = true
+	return "", "", nil
+}
+
+func (m *mockXConnectorWithUploadFailure) GetStatus(ctx context.Context, platformPostID string) (string, string, error) {
+	return "published", "", nil
+}
+
+func (m *mockXConnectorWithUploadFailure) ReconcilePublish(ctx context.Context, token string, platformUserID string, attemptID string, caption string) (connectors.ReconciliationResult, error) {
+	return connectors.ReconciliationResult{Outcome: connectors.ReconciliationUnknown}, nil
+}
+
+func TestTwitterMediaUploadFailurePreventsPublication(t *testing.T) {
+	postID := uuid.New()
+	targetID := uuid.New()
+	attemptID := uuid.New()
+	mediaID := uuid.New()
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	encryptedToken, err := auth.EncryptToken("access-token", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	caption := "Test X post with media"
+	store := &recoveryStore{
+		post: &model.Post{
+			ID:                   postID,
+			Caption:              &caption,
+			MediaID:              &mediaID,
+			Status:               "PUBLISHING",
+			SchedulingGeneration: 1,
+		},
+		target: model.PostTarget{
+			ID:     targetID,
+			PostID: postID,
+			Status: "PENDING",
+		},
+		account: model.SocialAccount{
+			Platform:    "twitter",
+			AccessToken: encryptedToken,
+		},
+		attempt: model.PublicationAttempt{
+			ID:           attemptID,
+			PostTargetID: targetID,
+			Status:       "PENDING",
+			AttemptCount: 1,
+			CreatedAt:    time.Now(),
+		},
+	}
+
+	mediaRepo := &testMediaRepo{
+		media: &model.Media{
+			ID:           mediaID,
+			StorageKey:   "users/123/image.png",
+			ContentType:  "image/png",
+			UploadStatus: "complete",
+		},
+	}
+	mediaStore := &testMediaStore{content: []byte("image data")}
+
+	xConnector := &mockXConnectorWithUploadFailure{}
+	processor := NewPublishProcessor(nil, store, map[string]connectors.PlatformConnector{
+		connectors.PlatformTwitter: xConnector,
+	}, key).WithMediaStore(mediaRepo, mediaStore)
+
+	processor.acquire = fakeAcquire(store)
+	task, _ := jobs.NewPublishTask(postID, 1)
+	err = processor.ProcessPublishJob(context.Background(), task)
+	if err != nil {
+		t.Fatalf("ProcessPublishJob returned unexpected error: %v", err)
+	}
+
+	if !xConnector.uploadCalled {
+		t.Fatal("expected UploadMedia to be called")
+	}
+	if xConnector.publishCalled {
+		t.Fatal("expected Publish NOT to be called when UploadMedia fails")
+	}
+	if store.attempt.Status != "FAILED" {
+		t.Fatalf("expected attempt status FAILED, got %s", store.attempt.Status)
+	}
+}
+

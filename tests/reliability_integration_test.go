@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -400,9 +401,19 @@ func TestPostMediaValidation(t *testing.T) {
 		}
 	}
 	execSQL(t, db, `INSERT INTO media(id,user_id,storage_provider,storage_key,original_filename,content_type,file_size,upload_status) VALUES($1,$2,'local',$3,'image.png','image/png',100,'complete')`, id, f.userID, fmt.Sprintf("test/%s", id))
-	_, err := storage.NewPostRepository(db).CreatePost(ctx, f.userID, uuid.NewString(), model.CreatePostInput{Caption: &caption, Targets: []uuid.UUID{f.accountID}, MediaID: &id})
-	if err == nil || err.Error() != "Twitter/X media uploads are not supported yet" {
-		t.Fatalf("X media accepted: %v", err)
+	post, err := storage.NewPostRepository(db).CreatePost(ctx, f.userID, uuid.NewString(), model.CreatePostInput{Caption: &caption, Targets: []uuid.UUID{f.accountID}, MediaID: &id})
+	if err != nil {
+		t.Fatalf("expected X media post to be created successfully, got: %v", err)
+	}
+	if post == nil || post.MediaID == nil || *post.MediaID != id {
+		t.Fatalf("unexpected created post: %+v", post)
+	}
+
+	pdfID := uuid.New()
+	execSQL(t, db, `INSERT INTO media(id,user_id,storage_provider,storage_key,original_filename,content_type,file_size,upload_status) VALUES($1,$2,'local',$3,'doc.pdf','application/pdf',100,'complete')`, pdfID, f.userID, fmt.Sprintf("test/%s", pdfID))
+	_, err = storage.NewPostRepository(db).CreatePost(ctx, f.userID, uuid.NewString(), model.CreatePostInput{Caption: &caption, Targets: []uuid.UUID{f.accountID}, MediaID: &pdfID})
+	if err == nil || !strings.Contains(err.Error(), "unsupported media type for Twitter/X") {
+		t.Fatalf("expected unsupported media type error for PDF, got: %v", err)
 	}
 }
 

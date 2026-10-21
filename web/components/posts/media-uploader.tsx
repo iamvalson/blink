@@ -1,6 +1,6 @@
 "use client";
 
-import { ImagePlus, Loader2, Trash2, Upload, AlertCircle } from "lucide-react";
+import { ImagePlus, Loader2, Trash2, Upload, AlertCircle, Info } from "lucide-react";
 import { useRef } from "react";
 import type { VideoMetadata } from "@/features/posts/utils/video-validator";
 
@@ -23,9 +23,11 @@ type MediaUploaderProps = {
   onUpload?: (localId: string, file: File) => void;
   onRemove?: (item: MediaFile) => void;
   disabled?: boolean;
+  /** When set, the add-more button is hidden and this message is shown instead. */
+  addBlockedReason?: string | null;
 };
 
-export function MediaUploader({ media, onChange, onUpload, onRemove, disabled }: MediaUploaderProps) {
+export function MediaUploader({ media, onChange, onUpload, onRemove, disabled, addBlockedReason }: MediaUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = (files: FileList | null) => {
@@ -60,6 +62,8 @@ export function MediaUploader({ media, onChange, onUpload, onRemove, disabled }:
 
     onChange(media.filter((item) => item.id !== id));
   };
+
+  const isAddBlocked = Boolean(addBlockedReason);
 
   return (
     <div className="space-y-3">
@@ -131,44 +135,53 @@ export function MediaUploader({ media, onChange, onUpload, onRemove, disabled }:
         </div>
       )}
 
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => inputRef.current?.click()}
-        className="flex w-full flex-col items-center justify-center rounded-lg border border-dashed px-6 py-8 text-center transition-colors hover:border-foreground/30 hover:bg-muted/40 disabled:opacity-50 disabled:pointer-events-none"
-      >
-        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-          {media.length > 0 ? (
-            <ImagePlus className="h-5 w-5" />
-          ) : (
-            <Upload className="h-5 w-5" />
-          )}
+      {/* Show limit-reached notice instead of add-more button when blocked */}
+      {isAddBlocked ? (
+        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-foreground/50" />
+          <span>{addBlockedReason}</span>
         </div>
-
-        <p className="text-sm font-medium">
-          {media.length > 0 ? "Add more media" : "Upload media"}
-        </p>
-
-        <p className="mt-1 text-xs text-muted-foreground">
-          PNG, JPG, GIF, MP4 and other supported formats
-        </p>
-
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*,video/*"
-          multiple
+      ) : (
+        <button
+          type="button"
           disabled={disabled}
-          className="hidden"
-          onChange={(event) => {
-            handleFiles(event.target.files);
+          onClick={() => inputRef.current?.click()}
+          className="flex w-full flex-col items-center justify-center rounded-lg border border-dashed px-6 py-8 text-center transition-colors hover:border-foreground/30 hover:bg-muted/40 disabled:opacity-50 disabled:pointer-events-none"
+        >
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+            {media.length > 0 ? (
+              <ImagePlus className="h-5 w-5" />
+            ) : (
+              <Upload className="h-5 w-5" />
+            )}
+          </div>
 
-            if (inputRef.current) {
-              inputRef.current.value = "";
-            }
-          }}
-        />
-      </button>
+          <p className="text-sm font-medium">
+            {media.length > 0 ? "Add more media" : "Upload media"}
+          </p>
+
+          <p className="mt-1 text-xs text-muted-foreground">
+            PNG, JPG, GIF, MP4 and other supported formats
+          </p>
+
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            disabled={disabled}
+            className="hidden"
+            onChange={(event) => {
+              handleFiles(event.target.files);
+
+              if (inputRef.current) {
+                inputRef.current.value = "";
+              }
+            }}
+          />
+        </button>
+      )}
     </div>
   );
 }
+

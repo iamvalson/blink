@@ -49,7 +49,7 @@ func NewRouter(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   corsOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "Idempotency-Key"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "Idempotency-Key", "Last-Event-ID"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -114,6 +114,7 @@ func NewRouter(
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts", postHandler.ListPosts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/upcoming", postHandler.ListUpcomingPosts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/{id}", postHandler.GetPost)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/posts/{id}/status", postHandler.PostStatusSSE)
 	r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/posts/{id}", postHandler.DeletePost)
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts/{id}/retry", postHandler.RetryPost)
 	r.With(middleware.RequireAuth(jwtService)).Patch("/api/v1/posts/{id}/schedule", postHandler.ReschedulePost)

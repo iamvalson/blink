@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { getPost, listPosts, listCalendarPosts, listUpcomingPosts } from "../api/create-post";
+import { usePostStatusStream } from "./use-post-status-stream";
 import type { ListPostsFilter } from "@/types/post";
 
 export const postsQueryKey = (filter?: ListPostsFilter) =>
@@ -17,29 +18,46 @@ export function usePosts(filter: ListPostsFilter = {}) {
   });
 }
 
+/**
+ * usePost fetches a single post and subscribes to its real-time status stream
+ * via SSE. Polling is used as a fallback when EventSource is unavailable (e.g.
+ * in test environments or behind a proxy that doesn't support streaming).
+ */
 export function usePost(id: string | null, enabled = true) {
+  const sseEnabled =
+    enabled && id !== null && typeof EventSource !== "undefined";
+
+  // Real-time updates via SSE — keeps the cache hot without polling.
+  usePostStatusStream(id, sseEnabled);
+
   return useQuery({
     queryKey: postQueryKey(id ?? ""),
     queryFn: () => getPost(id!),
     enabled: enabled && id !== null,
-    // Poll while the post is in a non-terminal state
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      if (!data) return false;
-      const terminalStatuses = ["PUBLISHED", "FAILED"];
-      if (terminalStatuses.includes(data.status)) return false;
-      // Check individual targets too
-      const allTargetsTerminal =
-        !data.targets ||
-        data.targets.length === 0 ||
-        data.targets.every(
-          (t) => t.status === "PUBLISHED" || t.status === "FAILED",
-        );
-      if (allTargetsTerminal && terminalStatuses.includes(data.status))
-        return false;
-      // Poll every 3 seconds while active
-      return 3000;
-    },
+    // Fall back to polling only when SSE is unavailable (non-browser or proxy
+    // that drops EventSource connections).
+    refetchInterval: sseEnabled
+      ? false
+      : (query) => {
+          const data = query.state.data;
+          if (!data) return false;
+          const terminalStatuses = [
+            "PUBLISHED",
+            "PARTIALLY_PUBLISHED",
+            "FAILED",
+            "CANCELLED",
+          ];
+          if (terminalStatuses.includes(data.status)) return false;
+          const allTargetsTerminal =
+            !data.targets ||
+            data.targets.length === 0 ||
+            data.targets.every(
+              (t) => t.status === "PUBLISHED" || t.status === "FAILED",
+            );
+          if (allTargetsTerminal && terminalStatuses.includes(data.status))
+            return false;
+          return 3000;
+        },
     refetchIntervalInBackground: false,
   });
 }

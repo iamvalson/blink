@@ -52,3 +52,21 @@ func TestRefreshTokenInvalidGrant(t *testing.T) {
 		t.Fatalf("expected invalid refresh token, got %v", err)
 	}
 }
+
+func TestOAuthConfigScopes(t *testing.T) {
+	cfg := TwitterConfig{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		CallbackURL:  "https://example.com/callback",
+	}
+	oauthCfg := NewOAuthConfig(cfg)
+	expectedScopes := []string{"tweet.read", "tweet.write", "users.read", "offline.access", "media.write"}
+	if len(oauthCfg.Scopes) != len(expectedScopes) {
+		t.Fatalf("expected %d scopes, got %d: %v", len(expectedScopes), len(oauthCfg.Scopes), oauthCfg.Scopes)
+	}
+	for i, scope := range expectedScopes {
+		if oauthCfg.Scopes[i] != scope {
+			t.Errorf("scope[%d] = %s, want %s", i, oauthCfg.Scopes[i], scope)
+		}
+	}
+}
