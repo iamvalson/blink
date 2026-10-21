@@ -116,7 +116,7 @@ Start PostgreSQL and Redis:
 make up
 ```
 
-Apply the schema migrations in order. The repository currently contains five
+Apply the schema migrations in order. The repository currently contains ten
 numbered migration pairs:
 
 ```bash
@@ -262,7 +262,12 @@ go vet ./cmd/api ./cmd/worker ./internal/config ./internal/worker
 
 The test suite includes API and service tests, connector tests, retry and
 publishing processor tests, OAuth refresh coverage, metrics tests, and an
-integration publishing scenario. External platform calls are mocked in tests.
+integration publishing scenario. External platform calls are mocked in the standard publishing tests.
+
+PostgreSQL/Redis integration tests require explicit `BLINK_TEST_DATABASE_URL`
+and `BLINK_TEST_REDIS_URL` settings and use isolated test schemas. See
+[`Publishing recovery`](docs/publishing_reliability.md) for the recovery model,
+deployment requirements, and test commands.
 
 ## Useful Commands
 

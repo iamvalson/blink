@@ -15,7 +15,8 @@ const (
 type RetryPolicy struct{}
 
 func (RetryPolicy) ShouldRetry(err error, attemptCount int) bool {
-	return attemptCount < MaxAttempts && connectors.ClassifyError(err) == connectors.ErrorRetryable
+	return attemptCount < MaxAttempts &&
+		publishClassification(err) == connectors.ErrorRetryable
 }
 
 func (RetryPolicy) ResolveRetryDelay(err error, attemptCount int) time.Duration {

@@ -2,134 +2,153 @@ package outbox
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/iamvalson/blink/internal/jobs"
-	"github.com/iamvalson/blink/internal/metrics"
-	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/rs/zerolog/log"
 )
 
-type Dispatcher struct {
-	outboxRepo *storage.OutboxRepository
-	postsRepo  *storage.PostRepository
-	jobsClient *jobs.Client
+type eventStore interface {
+	RecoverStalledPosts(context.Context) error
+	ClaimPendingEvents(context.Context, int, time.Duration) ([]storage.ClaimedOutboxEvent, error)
+	FinishClaim(context.Context, uuid.UUID, uuid.UUID, string, time.Time, string) error
 }
 
-func NewDispatcher(outboxRepo *storage.OutboxRepository, jobsClient *jobs.Client) *Dispatcher {
+type taskEnqueuer interface {
+	Enqueue(*asynq.Task, ...asynq.Option) (string, error)
+}
+
+type Dispatcher struct {
+	outboxRepo eventStore
+	postsRepo  *storage.PostRepository
+	jobsClient taskEnqueuer
+}
+
+func NewDispatcher(
+	outboxRepo eventStore,
+	jobsClient taskEnqueuer,
+) *Dispatcher {
 	return &Dispatcher{
 		outboxRepo: outboxRepo,
 		jobsClient: jobsClient,
 	}
 }
 
-// WithPostRepository attaches the post repository to enable scheduled posts claiming.
-func (d *Dispatcher) WithPostRepository(postsRepo *storage.PostRepository) *Dispatcher {
+func (d *Dispatcher) WithPostRepository(
+	postsRepo *storage.PostRepository,
+) *Dispatcher {
 	d.postsRepo = postsRepo
 	return d
 }
 
-// ProcessScheduledPosts queries and claims due scheduled posts using FOR UPDATE SKIP LOCKED
-// and inserts outbox events for them.
 func (d *Dispatcher) ProcessScheduledPosts(ctx context.Context) error {
 	if d.postsRepo == nil {
 		return nil
 	}
-	claimed, err := d.postsRepo.ClaimDueScheduledPosts(ctx, 50)
-	if err != nil {
-		return fmt.Errorf("claim due scheduled posts: %w", err)
-	}
-	if len(claimed) > 0 {
-		log.Info().Int("count", len(claimed)).Msg("Claimed due scheduled posts for dispatch")
-	}
-	return nil
+	_, err := d.postsRepo.ClaimDueScheduledPosts(ctx, 50)
+	return err
 }
 
-// ProcessPendingEvents reads pending outbox events and enqueues corresponding jobs
 func (d *Dispatcher) ProcessPendingEvents(ctx context.Context) error {
-	events, err := d.outboxRepo.GetPendingEvents(ctx, 100) // Process up to 100 at a time
-	if err != nil {
-		return fmt.Errorf("get pending events: %w", err)
+	if err := d.outboxRepo.RecoverStalledPosts(ctx); err != nil {
+		return fmt.Errorf("recover stalled posts: %w", err)
 	}
 
+	events, err := d.outboxRepo.ClaimPendingEvents(ctx, 100, time.Minute)
+	if err != nil {
+		return err
+	}
+
+	var failures []error
 	for _, event := range events {
 		if err := d.dispatchEvent(ctx, event); err != nil {
 			log.Error().
 				Err(err).
-				Str("event_id", event.ID.String()).
-				Msg("Failed to dispatch event")
-			continue // Continue processing other events
+				Str("event_id", event.Event.ID.String()).
+				Msg("Outbox dispatch failed")
+			failures = append(failures, err)
 		}
 	}
-
-	return nil
+	return errors.Join(failures...)
 }
 
-func (d *Dispatcher) dispatchEvent(ctx context.Context, event *model.OutboxEvent) error {
-	// Mark event as processing
-	if err := d.outboxRepo.MarkEventProcessing(ctx, event.ID); err != nil {
-		return fmt.Errorf("mark event processing: %w", err)
+func (d *Dispatcher) dispatchEvent(
+	ctx context.Context,
+	claimed storage.ClaimedOutboxEvent,
+) error {
+	event := claimed.Event
+
+	failPermanently := func(cause error) error {
+		saveErr := d.outboxRepo.FinishClaim(
+			ctx, event.ID, claimed.ClaimToken,
+			"FAILED", time.Time{}, cause.Error(),
+		)
+		return errors.Join(cause, saveErr)
 	}
 
-	// Handle based on event type
-	var task *asynq.Task
-	var err error
-
-	switch event.EventType {
-	case "POST_CREATED":
-		task, err = d.handlePostCreated(event)
-	default:
-		return fmt.Errorf("unknown event type: %s", event.EventType)
+	if claimed.DecodeError != nil {
+		return failPermanently(claimed.DecodeError)
 	}
 
+	if event.EventType != "POST_CREATED" {
+		return failPermanently(fmt.Errorf(
+			"unsupported event type: %s", event.EventType,
+		))
+	}
+
+	payload, err := json.Marshal(event.Payload)
 	if err != nil {
-		return fmt.Errorf("handle event: %w", err)
+		return failPermanently(err)
 	}
 
-	// Enqueue task with idempotency
-	// Blink owns publication-attempt retries; Asynq only schedules executions.
-	_, err = d.jobsClient.Enqueue(task, asynq.MaxRetry(0), asynq.Timeout(5*60*1000*1000*1000)) // 5 minutes
+	job, err := jobs.ParsePublishJob(payload)
 	if err != nil {
-		metrics.QueueFailure("enqueue")
-		// If enqueue fails, mark event as failed
-		if err := d.outboxRepo.MarkEventFailed(ctx, event.ID, err.Error()); err != nil {
-			log.Error().Err(err).Msg("Failed to mark event as failed")
+		return failPermanently(err)
+	}
+	if job.SchedulingGeneration < 1 {
+		// Recovery creates a fresh event with the authoritative generation.
+		return failPermanently(errors.New("missing scheduling generation"))
+	}
+
+	task, err := jobs.NewPublishTaskForJob(*job)
+	if err != nil {
+		return failPermanently(err)
+	}
+
+	_, enqueueErr := d.jobsClient.Enqueue(
+		task,
+		asynq.TaskID("outbox:"+event.ID.String()),
+		asynq.MaxRetry(10), // Infrastructure retries only.
+		asynq.Timeout(5*time.Minute),
+		asynq.Retention(24*time.Hour),
+	)
+
+	// A previous dispatcher may have enqueued successfully and crashed
+	// before marking the event published.
+	if enqueueErr != nil && !errors.Is(enqueueErr, asynq.ErrTaskIDConflict) {
+		delay := 5 * time.Second
+		for i := 1; i < event.Attempts && delay < 5*time.Minute; i++ {
+			delay *= 2
 		}
-		return fmt.Errorf("enqueue task: %w", err)
-	}
-
-	// Mark event as published
-	if err := d.outboxRepo.MarkEventPublished(ctx, event.ID); err != nil {
-		return fmt.Errorf("mark event published: %w", err)
-	}
-
-	return nil
-}
-
-func (d *Dispatcher) handlePostCreated(event *model.OutboxEvent) (*asynq.Task, error) {
-	// Extract post_id from payload
-	postIDStr, ok := event.Payload["post_id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("missing or invalid post_id in payload")
-	}
-
-	postID, err := uuid.Parse(postIDStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse post_id: %w", err)
-	}
-
-	gen := 0
-	if genVal, ok := event.Payload["scheduling_generation"]; ok {
-		switch v := genVal.(type) {
-		case float64:
-			gen = int(v)
-		case int:
-			gen = v
+		if delay > 5*time.Minute {
+			delay = 5 * time.Minute
 		}
+
+		saveErr := d.outboxRepo.FinishClaim(
+			ctx, event.ID, claimed.ClaimToken,
+			"PENDING", time.Now().Add(delay), enqueueErr.Error(),
+		)
+		return errors.Join(enqueueErr, saveErr)
 	}
 
-	return jobs.NewPublishTask(postID, gen)
+	return d.outboxRepo.FinishClaim(
+		ctx, event.ID, claimed.ClaimToken,
+		"PUBLISHED", time.Time{}, "",
+	)
 }

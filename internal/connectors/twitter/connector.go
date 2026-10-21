@@ -68,8 +68,18 @@ func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthPara
 }
 
 // UploadMedia uploads media to Twitter and returns media ID
-func (c *Connector) UploadMedia(ctx context.Context, token string, attemptID string, media io.Reader, mediaType string) (mediaID string, err error) {
-	return "media_placeholder", nil
+func (c *Connector) UploadMedia(
+	ctx context.Context,
+	token string,
+	attemptID string,
+	media io.Reader,
+	mediaType string,
+) (string, error) {
+	return "", connectors.NewClassifiedError(
+		connectors.ErrorPermanent,
+		"X_MEDIA_NOT_IMPLEMENTED",
+		fmt.Errorf("Twitter/X media uploads are not supported yet"),
+	)
 }
 
 // Publish posts a tweet

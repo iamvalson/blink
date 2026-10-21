@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/iamvalson/blink/internal/model"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,8 +18,16 @@ var (
 	ErrAttemptStateConflict = errors.New("publication attempt state conflict")
 )
 
+type publicationDB interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Begin(context.Context) (pgx.Tx, error)
+}
+
 type PublicationRepository struct {
-	db *pgxpool.Pool
+	db   publicationDB
+	pool *pgxpool.Pool
 }
 
 // RecordPermanentFailure atomically finalizes the attempt and target and upserts
@@ -46,13 +56,18 @@ func (r *PublicationRepository) RecordPermanentFailure(
 		return fmt.Errorf("get failed publication attempt: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
+	result, err := tx.Exec(ctx, `
 		UPDATE publication_attempts
-		SET status = 'FAILED', error_class = $1, error_message = $2,
+		SET status = 'FAILED', error_class = $1, error_message = $2, error_code = $5,
 			completed_at = $3, updated_at = $3, next_retry_at = NULL
-		WHERE id = $4 AND status IN ('PROCESSING', 'UNKNOWN', 'FAILED')
-	`, failureClass, failureReason, now, attemptID); err != nil {
+		WHERE id = $4 AND post_target_id = $6 AND status IN ('PENDING', 'RETRYING', 'PROCESSING', 'UNKNOWN', 'FAILED')
+	`, failureClass, failureReason, now, attemptID, errorCode, postTargetID)
+	if err != nil {
 		return fmt.Errorf("finalize publication attempt: %w", err)
+	}
+
+	if result.RowsAffected() != 1 {
+		return ErrAttemptStateConflict
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -100,6 +115,10 @@ func (r *PublicationRepository) RecordPermanentFailure(
 		return fmt.Errorf("upsert dead-letter job: %w", err)
 	}
 
+	if err := recomputePostStatusTx(ctx, tx, postID); err != nil {
+		return fmt.Errorf("recompute failed post status: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit permanent failure: %w", err)
 	}
@@ -107,7 +126,10 @@ func (r *PublicationRepository) RecordPermanentFailure(
 }
 
 func NewPublicationRepository(db *pgxpool.Pool) *PublicationRepository {
-	return &PublicationRepository{db: db}
+	return &PublicationRepository{
+		db:   db,
+		pool: db,
+	}
 }
 
 // GetPostForPublishing retrieves a post and all its pending targets
@@ -197,9 +219,13 @@ func (r *PublicationRepository) MarkAttemptProcessing(ctx context.Context, attem
 		ctx,
 		`
             UPDATE publication_attempts
-            SET status = 'PROCESSING', started_at = COALESCE(started_at, NOW()),
-                attempt_count = attempt_count + 1, updated_at = NOW()
-			WHERE id = $1 AND status IN ('PENDING', 'RETRYING', 'UNKNOWN', 'FAILED')
+			SET status = 'PROCESSING',
+				started_at = COALESCE(started_at, NOW()),
+				attempt_count = attempt_count + 1,
+				updated_at = NOW()
+			WHERE id = $1
+			AND status IN ('PENDING', 'RETRYING', 'FAILED')
+			AND (next_retry_at IS NULL OR next_retry_at <= NOW())
         `,
 		attemptID,
 	)
@@ -311,55 +337,6 @@ func (r *PublicationRepository) MarkAttemptFailed(
 			occurred_at = EXCLUDED.occurred_at
 	`, errorCode, errorMessage, now, attemptID); err != nil {
 		return fmt.Errorf("record failed attempt: %w", err)
-	}
-
-	return nil
-}
-
-// MarkAttemptRetrying persists a retry decision without consuming another delivery attempt.
-func (r *PublicationRepository) MarkAttemptRetrying(ctx context.Context, attemptID uuid.UUID, errorCode, errorClass, errorMessage string, nextRetryAt time.Time) error {
-	result, err := r.db.Exec(ctx, `
-		UPDATE publication_attempts
-		SET status = 'RETRYING', error_code = $1, error_class = $2, error_message = $3,
-		    next_retry_at = $4, completed_at = NULL, updated_at = NOW()
-		WHERE id = $5 AND status IN ('PROCESSING', 'PENDING')
-	`, errorCode, errorClass, errorMessage, nextRetryAt, attemptID)
-	if err != nil {
-		return fmt.Errorf("mark attempt retrying: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return ErrAttemptStateConflict
-	}
-	if _, err := r.db.Exec(ctx, `
-		INSERT INTO publication_attempt_failures (
-			publication_attempt_id, attempt_number, error_code, error_class,
-			error_message, occurred_at
-		)
-		SELECT id, attempt_count, $1, $2, $3, NOW()
-		FROM publication_attempts WHERE id = $4
-		ON CONFLICT (publication_attempt_id, attempt_number) DO UPDATE SET
-			error_code = EXCLUDED.error_code, error_class = EXCLUDED.error_class,
-			error_message = EXCLUDED.error_message, occurred_at = EXCLUDED.occurred_at
-	`, errorCode, errorClass, errorMessage, attemptID); err != nil {
-		return fmt.Errorf("record retryable attempt failure: %w", err)
-	}
-	return nil
-}
-
-// MarkPostTargetPublished updates a post target to PUBLISHED status
-func (r *PublicationRepository) MarkPostTargetPublished(ctx context.Context, postTargetID uuid.UUID) error {
-	_, err := r.db.Exec(
-		ctx,
-		`
-            UPDATE post_targets
-            SET status = 'PUBLISHED'
-            WHERE id = $1 AND status <> 'PUBLISHED'
-        `,
-		postTargetID,
-	)
-
-	if err != nil {
-		return fmt.Errorf("mark post target published: %w", err)
 	}
 
 	return nil

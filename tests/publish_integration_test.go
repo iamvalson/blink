@@ -20,10 +20,10 @@ import (
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/jobs"
+	"github.com/iamvalson/blink/internal/outbox"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/iamvalson/blink/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
 )
 
 type retryFakePlatform struct {
@@ -88,55 +88,10 @@ func (f *retryFakePlatform) ReconcilePublish(context.Context, string, string, st
 }
 
 func TestPublishPipelineIntegrationWithMockConnector(t *testing.T) {
-	_ = godotenv.Load("../.env")
-
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("DATABASE_URL not set; skipping database integration test")
-	}
-
-	encryptionKey := os.Getenv("ENCRYPTION_KEY")
-	if encryptionKey == "" {
-		encryptionKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	}
-
 	ctx := context.Background()
-	db, err := pgxpool.New(ctx, dbURL)
-	if err != nil {
-		t.Skipf("cannot connect to DB: %v; skipping", err)
-	}
-	defer db.Close()
-
-	if err := db.Ping(ctx); err != nil {
-		t.Skipf("database ping failed: %v; skipping", err)
-	}
-
-	// Ensure tables exist in fresh database (e.g. CI environments)
-	var usersTableExists bool
-	err = db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT FROM information_schema.tables 
-			WHERE table_name = 'users'
-		)
-	`).Scan(&usersTableExists)
-	if err != nil {
-		t.Skipf("cannot query database schema: %v; skipping", err)
-	}
-
-	if !usersTableExists {
-		migrationSQL, readErr := os.ReadFile("../migrations/000001_init_schema.up.sql")
-		if readErr != nil {
-			migrationSQL, readErr = os.ReadFile("migrations/000001_init_schema.up.sql")
-		}
-		if readErr != nil {
-			t.Fatalf("failed to read migrations file: %v", readErr)
-		}
-
-		if _, execErr := db.Exec(ctx, string(migrationSQL)); execErr != nil {
-			t.Fatalf("failed to apply migration schema: %v", execErr)
-		}
-	}
-	ensureRetryMigration(t, ctx, db)
+	db := testDatabase(t)
+	encryptionKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	var err error
 
 	// 1. Create a test user
 	testUserID := uuid.New()
@@ -210,7 +165,7 @@ func TestPublishPipelineIntegrationWithMockConnector(t *testing.T) {
 	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey)
 
 	// 7. Create Asynq PublishJob task and process it
-	task, err := jobs.NewPublishTask(testPostID)
+	task, err := jobs.NewPublishTask(testPostID, 1)
 	if err != nil {
 		t.Fatalf("failed to serialize publish job: %v", err)
 	}
@@ -290,28 +245,17 @@ func TestPublishPipelineIntegrationWithMockConnector(t *testing.T) {
 }
 
 func TestPublishRetryIntegrationWithPostgresRedis(t *testing.T) {
-	_ = godotenv.Load("../.env")
-	dbURL := os.Getenv("DATABASE_URL")
-	redisURL := os.Getenv("REDIS_URL")
-	if dbURL == "" || redisURL == "" {
-		t.Skip("DATABASE_URL and REDIS_URL are required for the retry integration test")
-	}
-
 	ctx := context.Background()
-	db, err := pgxpool.New(ctx, dbURL)
-	if err != nil {
-		t.Skipf("cannot connect to DB: %v; skipping", err)
+	db := testDatabase(t)
+	redisURL := os.Getenv("BLINK_TEST_REDIS_URL")
+	if redisURL == "" {
+		t.Skip("set BLINK_TEST_REDIS_URL to run Redis delivery integration tests")
 	}
-	defer db.Close()
-	if err := db.Ping(ctx); err != nil {
-		t.Skipf("database ping failed: %v; skipping", err)
-	}
-	ensureRetryMigration(t, ctx, db)
 
 	redisAddr := strings.TrimPrefix(strings.TrimPrefix(redisURL, "redis://"), "rediss://")
 	jobsClient, err := jobs.NewClient(redisAddr)
 	if err != nil {
-		t.Skipf("cannot connect to Redis: %v; skipping", err)
+		t.Fatalf("cannot connect to test Redis: %v", err)
 	}
 	defer jobsClient.Close()
 	inspector := asynq.NewInspector(asynq.RedisClientOpt{Addr: redisAddr})
@@ -357,40 +301,80 @@ func TestPublishRetryIntegrationWithPostgresRedis(t *testing.T) {
 		t.Fatalf("insert publication attempt: %v", err)
 	}
 
+	var taskIDs []string
 	defer func() {
-		if scheduled, listErr := inspector.ListScheduledTasks("default"); listErr == nil {
-			for _, task := range scheduled {
-				_ = inspector.DeleteTask("default", task.ID)
-			}
+		for _, id := range taskIDs {
+			_ = inspector.DeleteTask("default", id)
 		}
 	}()
 
 	processor := worker.NewPublishProcessor(storage.NewPostRepository(db), storage.NewPublicationRepository(db), map[string]connectors.PlatformConnector{
 		connectors.PlatformTwitter: fakePlatform,
 	}, encryptionKey, jobsClient)
-	task, err := jobs.NewPublishTask(testPostID)
+	task, err := jobs.NewPublishTask(testPostID, 1)
 	if err != nil {
 		t.Fatalf("create publish task: %v", err)
 	}
 
-	if err := processor.ProcessPublishJob(ctx, task); err != nil {
-		t.Fatalf("first publish execution: %v", err)
-	}
-	assertRetryState(t, ctx, db, testAttemptID, "RETRYING", 1)
-	firstScheduled := waitForScheduledTask(t, inspector, testPostID)
-	assertDelay(t, firstScheduled.NextProcessAt, time.Minute)
-	_ = inspector.DeleteTask("default", firstScheduled.ID)
-
-	if err := processor.ProcessPublishJob(ctx, task); err != nil {
-		t.Fatalf("second publish execution: %v", err)
-	}
-	assertRetryState(t, ctx, db, testAttemptID, "RETRYING", 2)
-	secondScheduled := waitForScheduledTask(t, inspector, testPostID)
-	assertDelay(t, secondScheduled.NextProcessAt, 5*time.Minute)
-	_ = inspector.DeleteTask("default", secondScheduled.ID)
-
-	if err := processor.ProcessPublishJob(ctx, task); err != nil {
-		t.Fatalf("third publish execution: %v", err)
+	dispatcher := outbox.NewDispatcher(storage.NewOutboxRepository(db), jobsClient)
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := processor.ProcessPublishJob(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+		if attempt == 3 {
+			break
+		}
+		assertRetryState(t, ctx, db, testAttemptID, "RETRYING", attempt)
+		var eventID uuid.UUID
+		var availableAt time.Time
+		if err := db.QueryRow(ctx, `SELECT id, available_at FROM outbox_events
+			WHERE aggregate_id = $1 AND status = 'PENDING'`, testPostID).Scan(&eventID, &availableAt); err != nil {
+			t.Fatal(err)
+		}
+		delay := time.Minute
+		if attempt == 2 {
+			delay = 5 * time.Minute
+		}
+		assertDelay(t, availableAt, delay)
+		// Early duplicate deliveries must not bypass the database retry time.
+		if err := processor.ProcessPublishJob(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+		assertRetryState(t, ctx, db, testAttemptID, "RETRYING", attempt)
+		if err := dispatcher.ProcessPendingEvents(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var pending string
+		if err := db.QueryRow(ctx, `SELECT status FROM outbox_events WHERE id=$1`, eventID).Scan(&pending); err != nil {
+			t.Fatal(err)
+		}
+		if pending != "PENDING" {
+			t.Fatalf("future event dispatched: %s", pending)
+		}
+		// Advance only this test's retry, rather than sleeping for minutes.
+		if _, err := db.Exec(ctx, `UPDATE publication_attempts SET next_retry_at=NOW()-INTERVAL '1 second' WHERE id=$1`, testAttemptID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(ctx, `UPDATE outbox_events SET available_at=NOW()-INTERVAL '1 second' WHERE id=$1`, eventID); err != nil {
+			t.Fatal(err)
+		}
+		if err := dispatcher.ProcessPendingEvents(ctx); err != nil {
+			t.Fatal(err)
+		}
+		id := "outbox:" + eventID.String()
+		taskIDs = append(taskIDs, id)
+		queued, err := inspector.GetTaskInfo("default", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		job, err := jobs.ParsePublishJob(queued.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.TargetID == nil || *job.TargetID != testTargetID || job.SchedulingGeneration != 1 {
+			t.Fatalf("retry must address only its target and generation: %+v", job)
+		}
+		task = asynq.NewTask(queued.Type, queued.Payload)
 	}
 	var status string
 	var attemptCount int
@@ -414,81 +398,6 @@ func TestPublishRetryIntegrationWithPostgresRedis(t *testing.T) {
 	}
 }
 
-func ensureRetryMigration(t *testing.T, ctx context.Context, db *pgxpool.Pool) {
-	var hasUsersTable bool
-	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users')`).Scan(&hasUsersTable); err != nil {
-		t.Fatalf("check base schema: %v", err)
-	}
-	if !hasUsersTable {
-		data, err := os.ReadFile("../migrations/000001_init_schema.up.sql")
-		if err != nil {
-			t.Fatalf("read base migration: %v", err)
-		}
-		if _, err := db.Exec(ctx, string(data)); err != nil {
-			t.Fatalf("apply base migration: %v", err)
-		}
-	}
-
-	var hasRetryColumn, hasFailureTable bool
-	if err := db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_name = 'publication_attempts' AND column_name = 'next_retry_at'
-		), EXISTS (
-			SELECT 1 FROM information_schema.tables
-			WHERE table_name = 'publication_attempt_failures'
-		)
-	`).Scan(&hasRetryColumn, &hasFailureTable); err != nil {
-		t.Fatalf("check retry migration: %v", err)
-	}
-	if !hasRetryColumn {
-		for _, migration := range []string{"../migrations/000002_publication_reliability.up.sql", "../migrations/000003_publication_retry.up.sql"} {
-			data, err := os.ReadFile(migration)
-			if err != nil {
-				t.Fatalf("read migration %s: %v", migration, err)
-			}
-			if _, err := db.Exec(ctx, string(data)); err != nil {
-				t.Fatalf("apply migration %s: %v", migration, err)
-			}
-		}
-	}
-	if !hasFailureTable {
-		migration := "../migrations/000004_dead_letter_queue.up.sql"
-		data, err := os.ReadFile(migration)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", migration, err)
-		}
-		if _, err := db.Exec(ctx, string(data)); err != nil {
-			t.Fatalf("apply migration %s: %v", migration, err)
-		}
-	}
-
-	var hasContentFormatColumn bool
-	if err := db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_name = 'posts' AND column_name = 'content_format'
-		)
-	`).Scan(&hasContentFormatColumn); err != nil {
-		t.Fatalf("check content_format migration: %v", err)
-	}
-	if !hasContentFormatColumn {
-		for _, migration := range []string{
-			"../migrations/000006_media_storage.up.sql",
-			"../migrations/000007_media_storage_provider.up.sql",
-			"../migrations/000008_post_content_format.up.sql",
-		} {
-			data, err := os.ReadFile(migration)
-			if err != nil {
-				data, err = os.ReadFile(strings.TrimPrefix(migration, "../"))
-			}
-			if err == nil {
-				_, _ = db.Exec(ctx, string(data))
-			}
-		}
-	}
-}
-
 func assertRetryState(t *testing.T, ctx context.Context, db *pgxpool.Pool, attemptID uuid.UUID, wantStatus string, wantCount int) {
 	t.Helper()
 	var status string
@@ -499,25 +408,6 @@ func assertRetryState(t *testing.T, ctx context.Context, db *pgxpool.Pool, attem
 	if status != wantStatus || count != wantCount {
 		t.Fatalf("retry state = %s/%d, want %s/%d", status, count, wantStatus, wantCount)
 	}
-}
-
-func waitForScheduledTask(t *testing.T, inspector *asynq.Inspector, postID uuid.UUID) *asynq.TaskInfo {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		tasks, err := inspector.ListScheduledTasks("default")
-		if err == nil {
-			for _, task := range tasks {
-				job, parseErr := jobs.ParsePublishJob(task.Payload)
-				if parseErr == nil && job.PostID == postID {
-					return task
-				}
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for scheduled task for post %s", postID)
-	return nil
 }
 
 func assertDelay(t *testing.T, scheduledAt time.Time, expected time.Duration) {

@@ -111,7 +111,7 @@ func TestMediaHandler_ValidUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create form file: %v", err)
 	}
-	_, _ = part.Write([]byte("dummy video!"))
+	_, _ = part.Write([]byte("\x00\x00\x00\x0cftypisom"))
 	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media", body)

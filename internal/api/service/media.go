@@ -228,15 +228,14 @@ func (s *MediaService) CompleteUpload(ctx context.Context, userID, mediaID uuid.
 func (s *MediaService) validateFileSignature(ctx context.Context, key, expectedType string) error {
 	rc, err := s.store.Get(ctx, key)
 	if err != nil {
-		// If streaming read fails, head check was already verified.
-		return nil
+		return fmt.Errorf("read media for signature validation: %w", err)
 	}
 	defer rc.Close()
 
 	header := make([]byte, 512)
 	n, readErr := io.ReadFull(rc, header)
 	if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
-		return nil
+		return fmt.Errorf("read media signature: %w", readErr)
 	}
 	if n == 0 {
 		return ErrEmptyFile
@@ -317,7 +316,7 @@ func (s *MediaService) Upload(ctx context.Context, input UploadInput) (*model.Me
 	if input.Size > maxSize {
 		return nil, ErrFileTooLarge
 	}
-	if input.Size == 0 {
+	if input.Size <= 0 {
 		return nil, ErrEmptyFile
 	}
 
@@ -355,7 +354,7 @@ func (s *MediaService) Upload(ctx context.Context, input UploadInput) (*model.Me
 		return nil, fmt.Errorf("create pending media record: %w", err)
 	}
 
-	n, err := s.store.Put(ctx, storageKey, input.Body, cleanType)
+	n, err := s.store.Put(ctx, storageKey, io.LimitReader(input.Body, maxSize+1), cleanType)
 	if err != nil {
 		_ = s.media.MarkFailed(ctx, record.ID)
 		return nil, fmt.Errorf("store media: %w", err)
@@ -365,6 +364,17 @@ func (s *MediaService) Upload(ctx context.Context, input UploadInput) (*model.Me
 		_ = s.media.MarkFailed(ctx, record.ID)
 		_ = s.store.Delete(ctx, storageKey)
 		return nil, ErrEmptyFile
+	}
+
+	if n > maxSize {
+		_ = s.media.MarkFailed(ctx, record.ID)
+		_ = s.store.Delete(ctx, storageKey)
+		return nil, ErrFileTooLarge
+	}
+	if err := s.validateFileSignature(ctx, storageKey, cleanType); err != nil {
+		_ = s.media.MarkFailed(ctx, record.ID)
+		_ = s.store.Delete(ctx, storageKey)
+		return nil, err
 	}
 
 	if err := s.media.MarkComplete(ctx, record.ID, n); err != nil {

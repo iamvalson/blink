@@ -2,34 +2,49 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 )
 
 type PublishJob struct {
-	PostID               uuid.UUID `json:"post_id"`
-	SchedulingGeneration int       `json:"scheduling_generation,omitempty"`
+	PostID               uuid.UUID  `json:"post_id"`
+	TargetID             *uuid.UUID `json:"target_id,omitempty"`
+	SchedulingGeneration int        `json:"scheduling_generation,omitempty"`
 }
 
-
-func NewPublishTask(postID uuid.UUID, schedulingGenerations ...int) (*asynq.Task, error) {
-	gen := 0
-	if len(schedulingGenerations) > 0 {
-		gen = schedulingGenerations[0]
+func NewPublishTask(postID uuid.UUID, generations ...int) (*asynq.Task, error) {
+	generation := 0
+	if len(generations) > 0 {
+		generation = generations[0]
 	}
-	payload, err := json.Marshal(PublishJob{PostID: postID, SchedulingGeneration: gen})
+
+	return NewPublishTaskForJob(PublishJob{
+		PostID:               postID,
+		SchedulingGeneration: generation,
+	})
+}
+
+func NewPublishTaskForJob(job PublishJob) (*asynq.Task, error) {
+	if job.PostID == uuid.Nil {
+		return nil, errors.New("post ID is required")
+	}
+
+	payload, err := json.Marshal(job)
 	if err != nil {
 		return nil, err
 	}
 	return asynq.NewTask(TypePublishPost, payload), nil
 }
 
-
 func ParsePublishJob(payload []byte) (*PublishJob, error) {
 	var job PublishJob
-	if err := json.Unmarshal(payload, &job); err != nil{
+	if err := json.Unmarshal(payload, &job); err != nil {
 		return nil, err
+	}
+	if job.PostID == uuid.Nil {
+		return nil, errors.New("post ID is required")
 	}
 	return &job, nil
 }
