@@ -1,7 +1,7 @@
 "use client";
 
 import { ImageIcon, MoreHorizontal } from "lucide-react";
-import { siYoutube } from "simple-icons";
+import { siTiktok, siYoutube } from "simple-icons";
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 
@@ -39,7 +39,7 @@ export function PostPreview({ caption, media, platforms }: PostPreviewProps) {
               <div>
                 <p className="text-sm font-medium">Your account</p>
                 <p className="text-xs text-muted-foreground">
-                  {previewPlatform === "twitter"
+                  {previewPlatform === "twitter" || previewPlatform === "tiktok"
                     ? "@youraccount"
                     : "Your channel"}
                 </p>
@@ -91,6 +91,15 @@ export function PostPreview({ caption, media, platforms }: PostPreviewProps) {
                   >
                     <path d={siYoutube.path} />
                   </svg>
+                ) : previewPlatform === "tiktok" ? (
+                  <svg
+                    role="img"
+                    viewBox="0 0 24 24"
+                    className="h-6 w-6 fill-current text-muted-foreground"
+                    aria-label="TikTok"
+                  >
+                    <path d={siTiktok.path} />
+                  </svg>
                 ) : (
                   <ImageIcon className="h-6 w-6 text-muted-foreground" />
                 )}
@@ -103,7 +112,9 @@ export function PostPreview({ caption, media, platforms }: PostPreviewProps) {
               <span>
                 {previewPlatform === "twitter"
                   ? "Post on X"
-                  : "Upload to YouTube"}
+                  : previewPlatform === "tiktok"
+                    ? "Post on TikTok"
+                    : "Upload to YouTube"}
               </span>
             </div>
           </div>
@@ -111,8 +122,13 @@ export function PostPreview({ caption, media, platforms }: PostPreviewProps) {
 
         {platforms.length > 1 && (
           <p className="mt-4 text-center text-xs text-muted-foreground">
-            Previewing {previewPlatform === "twitter" ? "X" : "YouTube"} ·{" "}
-            {platforms.length} platforms selected
+            Previewing{" "}
+            {previewPlatform === "twitter"
+              ? "X"
+              : previewPlatform === "tiktok"
+                ? "TikTok"
+                : "YouTube"}{" "}
+            · {platforms.length} platforms selected
           </p>
         )}
       </CardContent>

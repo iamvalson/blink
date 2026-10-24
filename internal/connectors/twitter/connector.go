@@ -29,9 +29,14 @@ type Connector struct {
 var _ connectors.OAuthConnector = (*Connector)(nil)
 
 // New creates a new Twitter/X connector.
-func New(cfg TwitterConfig) *Connector {
+func New(cfg TwitterConfig, client ...*http.Client) *Connector {
+	var hc *http.Client
+	if len(client) > 0 && client[0] != nil {
+		hc = client[0]
+	}
 	return &Connector{
 		oauthConfig: NewOAuthConfig(cfg),
+		httpClient:  hc,
 	}
 }
 
@@ -39,8 +44,8 @@ func New(cfg TwitterConfig) *Connector {
 func (c *Connector) PlatformID() string { return connectors.PlatformTwitter }
 
 // AuthCodeURL returns the URL the browser should be redirected to.
-func (c *Connector) AuthCodeURL(state, verifier string) string {
-	return GetAuthURL(c.oauthConfig, state, verifier)
+func (c *Connector) AuthCodeURL(state, verifier string) (string, error) {
+	return GetAuthURL(c.oauthConfig, state, verifier), nil
 }
 
 // SetAccessToken sets the user's OAuth token
@@ -50,14 +55,19 @@ func (c *Connector) SetAccessToken(token string) {
 
 // Authenticate exchanges auth code for tokens and returns user ID
 func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthParams) (result connectors.AuthResult, err error) {
+	authCtx := ctx
+	if c.httpClient != nil {
+		authCtx = context.WithValue(ctx, oauth2.HTTPClient, c.httpClient)
+	}
+
 	// Exchange code for token
-	token, err := ExchangeCodeForToken(ctx, c.oauthConfig, params.Code, params.CodeVerifier)
+	token, err := ExchangeCodeForToken(authCtx, c.oauthConfig, params.Code, params.CodeVerifier)
 	if err != nil {
 		return connectors.AuthResult{}, fmt.Errorf("oauth exchange failed: %w", err)
 	}
 
 	// Get user info
-	userInfo, err := GetUserInfo(ctx, token)
+	userInfo, err := GetUserInfo(ctx, token, c.httpClient)
 	if err != nil {
 		return connectors.AuthResult{}, fmt.Errorf("failed to get user info: %w", err)
 	}
@@ -640,4 +650,3 @@ func (c *Connector) ReconcilePublish(ctx context.Context, token string, platform
 func (c *Connector) GetOAuthConfig() *oauth2.Config {
 	return c.oauthConfig
 }
-

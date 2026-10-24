@@ -18,6 +18,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL;
 const OAUTH_PATHS: Record<Platform, string> = {
   twitter: "/auth/twitter",
   youtube: "/auth/youtube",
+  tiktok: "/auth/tiktok",
 };
 
 export function ConnectPlatform({

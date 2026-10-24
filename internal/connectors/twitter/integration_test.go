@@ -65,4 +65,3 @@ func TestIntegration_TwitterLifecycle(t *testing.T) {
 	}
 	t.Logf("Status: %s, URL: %s", status, statusURL)
 }
-

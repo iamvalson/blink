@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
@@ -66,6 +68,15 @@ func run(ctx context.Context) error {
 		CallbackURL:  os.Getenv("YOUTUBE_CALLBACK_URL"),
 	}
 	youtubeConnector := youtube.New(youtubeCfg)
+
+	// Initialize TikTok connector
+	tiktokCfg := tiktok.TikTokConfig{
+		ClientKey:    os.Getenv("TIKTOK_CLIENT_KEY"),
+		ClientSecret: os.Getenv("TIKTOK_CLIENT_SECRET"),
+		RedirectURI:  os.Getenv("TIKTOK_REDIRECT_URI"),
+		Scopes:       strings.Split(os.Getenv("TIKTOK_SCOPES"), ","),
+	}
+	tiktokConnector := tiktok.New(tiktokCfg)
 
 	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
@@ -163,7 +174,7 @@ func run(ctx context.Context) error {
 	//
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
-	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector}
+	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector, tiktokConnector}
 	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, mediaHandler)
 
 	// HTTP Server

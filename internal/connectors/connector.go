@@ -56,7 +56,7 @@ type OAuthConnector interface {
 
 	// AuthCodeURL returns the URL the browser should be redirected to in order
 	// to begin the OAuth flow for this platform.
-	AuthCodeURL(state, verifier string) string
+	AuthCodeURL(state, verifier string) (string, error)
 }
 
 var _ PlatformConnector = (*MockConnector)(nil)
@@ -65,4 +65,5 @@ var _ PlatformConnector = (*MockConnector)(nil)
 const (
 	PlatformTwitter = "twitter"
 	PlatformYoutube = "youtube"
+	PlatformTikTok  = "tiktok"
 )

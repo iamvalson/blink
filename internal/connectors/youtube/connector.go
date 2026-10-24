@@ -60,8 +60,8 @@ func (c *Connector) PlatformID() string {
 }
 
 // AuthCodeURL returns the URL the browser should be  redirected to
-func (c *Connector) AuthCodeURL(state, verifier string) string {
-	return GetAuthURL(c.oauthConfig, state)
+func (c *Connector) AuthCodeURL(state, verifier string) (string, error) {
+	return GetAuthURL(c.oauthConfig, state), nil
 }
 
 // SetAccessToken sets the user's OAuth token
@@ -74,8 +74,13 @@ func (c *Connector) Authenticate(
 	ctx context.Context,
 	params connectors.AuthParams,
 ) (connectors.AuthResult, error) {
+	authCtx := ctx
+	if c.httpClient != nil {
+		authCtx = context.WithValue(ctx, oauth2.HTTPClient, c.httpClient)
+	}
+
 	token, err := ExchangeCodeForToken(
-		ctx, c.oauthConfig, params.Code,
+		authCtx, c.oauthConfig, params.Code,
 	)
 	if err != nil {
 		return connectors.AuthResult{}, fmt.Errorf(
@@ -84,7 +89,7 @@ func (c *Connector) Authenticate(
 		)
 	}
 
-	channel, err := GetChannelInfo(ctx, token)
+	channel, err := GetChannelInfo(authCtx, token)
 	if err != nil {
 		return connectors.AuthResult{}, fmt.Errorf(
 			"failed to get YouTube channel: %w",

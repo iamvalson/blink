@@ -44,7 +44,10 @@ func setupTestConnector(t *testing.T, serverURL string) *Connector {
 
 func TestConnector_AuthCodeURL(t *testing.T) {
 	conn := setupTestConnector(t, "http://dummy")
-	url := conn.AuthCodeURL("random-state", "random-verifier")
+	url, err := conn.AuthCodeURL("random-state", "random-verifier")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if !strings.Contains(url, "random-state") {
 		t.Errorf("expected AuthCodeURL to contain state, got: %s", url)
@@ -116,6 +119,65 @@ func TestConnector_Authenticate(t *testing.T) {
 	}
 	if res.AccessToken != "mock-access-token" {
 		t.Errorf("expected access token 'mock-access-token', got '%s'", res.AccessToken)
+	}
+}
+
+type roundTripFuncYouTube func(*http.Request) (*http.Response, error)
+
+func (f roundTripFuncYouTube) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestConnector_Authenticate_InjectedClient(t *testing.T) {
+	var tokenCalls, channelCalls int
+	customClient := &http.Client{
+		Transport: roundTripFuncYouTube(func(r *http.Request) (*http.Response, error) {
+			if strings.Contains(r.URL.Path, "token") {
+				tokenCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`{
+						"access_token": "injected-yt-token",
+						"refresh_token": "injected-yt-refresh",
+						"token_type": "Bearer",
+						"expires_in": 3600
+					}`)),
+				}, nil
+			}
+			if strings.Contains(r.URL.Path, "channels") {
+				channelCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`{
+						"items": [
+							{"id": "UC_injected_channel"}
+						]
+					}`)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("not found")),
+			}, nil
+		}),
+	}
+
+	conn := New(YouTubeConfig{ClientID: "cid"}, customClient)
+	res, err := conn.Authenticate(context.Background(), connectors.AuthParams{Code: "code-yt"})
+	if err != nil {
+		t.Fatalf("Authenticate failed with injected client: %v", err)
+	}
+	if tokenCalls != 1 {
+		t.Errorf("expected 1 token call via injected client, got %d", tokenCalls)
+	}
+	if channelCalls != 1 {
+		t.Errorf("expected 1 channel info call via injected client, got %d", channelCalls)
+	}
+	if res.PlatformUserID != "UC_injected_channel" {
+		t.Errorf("PlatformUserID = %s, want UC_injected_channel", res.PlatformUserID)
 	}
 }
 

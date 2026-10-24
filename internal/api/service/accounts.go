@@ -22,7 +22,7 @@ func (s *AccountsService) ListAccounts(ctx context.Context, userID string) ([]*m
 
 func (s *AccountsService) DisconnectAccount(ctx context.Context, userID string, platform string) error {
 	// Only valid platforms (we can expand this if needed, or rely on frontend routing/existing integrations)
-	if platform != "twitter" && platform != "youtube" {
+	if platform != "twitter" && platform != "youtube" && platform != "tiktok" {
 		return fmt.Errorf("unsupported platform: %s", platform)
 	}
 	return s.accounts.DeleteByUserIDAndPlatform(ctx, userID, platform)

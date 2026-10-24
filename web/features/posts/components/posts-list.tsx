@@ -18,7 +18,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { siX, siYoutube } from "simple-icons";
+import { siTiktok, siX, siYoutube } from "simple-icons";
 import { formatDistanceToNow } from "date-fns";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -41,7 +41,14 @@ function PlatformIcon({
   platform: string;
   className?: string;
 }) {
-  const icon = platform === "youtube" ? siYoutube : platform === "twitter" ? siX : null;
+  const icon =
+    platform === "youtube"
+      ? siYoutube
+      : platform === "twitter"
+        ? siX
+        : platform === "tiktok"
+          ? siTiktok
+          : null;
   if (!icon) return null;
   return (
     <svg
@@ -69,6 +76,7 @@ const PLATFORM_FILTERS = [
   { value: "", label: "All platforms" },
   { value: "youtube", label: "YouTube" },
   { value: "twitter", label: "X" },
+  { value: "tiktok", label: "TikTok" },
 ];
 
 // ─── Post card ────────────────────────────────────────────────────────────────
@@ -166,7 +174,11 @@ function PostCard({
                   className="h-3 w-3 fill-current"
                 />
                 <span className="capitalize">
-                  {target.platform === "twitter" ? "X" : target.platform}
+                  {target.platform === "twitter"
+                    ? "X"
+                    : target.platform === "tiktok"
+                      ? "TikTok"
+                      : target.platform}
                 </span>
                 <StatusBadge status={target.status} />
               </div>

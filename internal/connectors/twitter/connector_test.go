@@ -28,6 +28,155 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestNew_WithCustomClient(t *testing.T) {
+	customClient := &http.Client{Timeout: 5 * time.Second}
+	conn := New(TwitterConfig{}, customClient)
+	if conn.httpClient != customClient {
+		t.Errorf("expected custom HTTP client to be set")
+	}
+}
+
+func TestConnector_Authenticate_Success(t *testing.T) {
+	var calledToken, calledUser bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/token" && r.Method == http.MethodPost {
+			calledToken = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"access_token": "mock-twitter-token",
+				"refresh_token": "mock-twitter-refresh",
+				"token_type": "bearer",
+				"expires_in": 3600
+			}`))
+			return
+		}
+		if r.URL.Path == "/2/users/me" && r.Method == http.MethodGet {
+			calledUser = true
+			if r.Header.Get("Authorization") != "Bearer mock-twitter-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"id":"tw-user-777","name":"Auth User","username":"authuser"}}`))
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+	}))
+	defer server.Close()
+
+	origURL := userInfoURL
+	userInfoURL = server.URL + "/2/users/me"
+	defer func() { userInfoURL = origURL }()
+
+	conn := New(TwitterConfig{
+		ClientID:     "test_id",
+		ClientSecret: "test_secret",
+		CallbackURL:  "http://localhost:8080/callback",
+	})
+	conn.oauthConfig.Endpoint.TokenURL = server.URL + "/oauth2/token"
+
+	res, err := conn.Authenticate(context.Background(), connectors.AuthParams{
+		Code:         "code-val",
+		CodeVerifier: "verifier-val",
+	})
+	if err != nil {
+		t.Fatalf("Authenticate failed: %v", err)
+	}
+
+	if !calledToken {
+		t.Error("expected token endpoint to be called")
+	}
+	if !calledUser {
+		t.Error("expected user info endpoint to be called")
+	}
+	if res.PlatformUserID != "tw-user-777" {
+		t.Errorf("PlatformUserID = %s, want tw-user-777", res.PlatformUserID)
+	}
+	if res.AccessToken != "mock-twitter-token" {
+		t.Errorf("AccessToken = %s, want mock-twitter-token", res.AccessToken)
+	}
+	if res.RefreshToken != "mock-twitter-refresh" {
+		t.Errorf("RefreshToken = %s, want mock-twitter-refresh", res.RefreshToken)
+	}
+	if conn.accessToken != "mock-twitter-token" {
+		t.Errorf("conn.accessToken = %s, want mock-twitter-token", conn.accessToken)
+	}
+}
+
+func TestConnector_Authenticate_InjectedClient(t *testing.T) {
+	var tokenCalls, userCalls int
+	customClient := &http.Client{
+		Transport: roundTripFuncTwitter(func(r *http.Request) (*http.Response, error) {
+			if strings.Contains(r.URL.Path, "token") {
+				tokenCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`{
+						"access_token": "injected-token",
+						"refresh_token": "injected-refresh",
+						"token_type": "bearer",
+						"expires_in": 3600
+					}`)),
+				}, nil
+			}
+			if strings.Contains(r.URL.Path, "users/me") {
+				userCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"data":{"id":"injected-user-id","username":"inj"}}`)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("not found")),
+			}, nil
+		}),
+	}
+
+	conn := New(TwitterConfig{ClientID: "cid"}, customClient)
+	res, err := conn.Authenticate(context.Background(), connectors.AuthParams{
+		Code:         "code-1",
+		CodeVerifier: "verifier-1",
+	})
+	if err != nil {
+		t.Fatalf("Authenticate failed with injected client: %v", err)
+	}
+	if tokenCalls != 1 {
+		t.Errorf("expected 1 token call via injected client, got %d", tokenCalls)
+	}
+	if userCalls != 1 {
+		t.Errorf("expected 1 user info call via injected client, got %d", userCalls)
+	}
+	if res.PlatformUserID != "injected-user-id" {
+		t.Errorf("PlatformUserID = %s, want injected-user-id", res.PlatformUserID)
+	}
+}
+
+func TestConnector_AuthCodeURL(t *testing.T) {
+	cfg := TwitterConfig{
+		ClientID:     "test_id",
+		ClientSecret: "test_secret",
+		CallbackURL:  "http://localhost:8080/auth/twitter/callback",
+	}
+
+	conn := New(cfg)
+	url, err := conn.AuthCodeURL("random-state", "random-verifier")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(url, "random-state") {
+		t.Errorf("expected AuthCodeURL to contain state, got: %s", url)
+	}
+	if !strings.Contains(url, "test_id") {
+		t.Errorf("expected AuthCodeURL to contain client id, got: %s", url)
+	}
+}
+
 func TestSetAccessToken(t *testing.T) {
 	cfg := TwitterConfig{
 		ClientID:     "test_id",
@@ -571,5 +720,3 @@ func TestPublish_RejectsMoreThan4MediaIDs(t *testing.T) {
 		t.Fatalf("expected error message to mention at most 4 media items, got: %v", err)
 	}
 }
-
-

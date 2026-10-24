@@ -100,4 +100,3 @@ func TestMockAuthenticate(t *testing.T) {
 		t.Error("expected future token expiry")
 	}
 }
-
