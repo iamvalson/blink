@@ -58,7 +58,7 @@ func TestExchangeCodeForToken(t *testing.T) {
 			t.Error("incorrect token request parameters")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"access_token":"test-access","refresh_token":"test-refresh","token_type":"Bearer","expires_in":3600,"open_id":"test-user","scope":"user.info.basic","refresh_expires_in":86400}`)
+		_, _ = io.WriteString(w, `{"access_token":"test-access","refresh_token":"test-refresh","token_type":"Bearer","expires_in":3600,"open_id":"test-user","scope":"user.info.basic","refresh_expires_in":86400}`)
 	}))
 	defer server.Close()
 	cfg := NewOAuthConfig(TikTokConfig{ClientKey: "test-key", ClientSecret: "secret+&", RedirectURI: "https://example.com/callback"})
@@ -101,7 +101,10 @@ func TestExchangeCodeForTokenErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); io.WriteString(w, tc.body) }))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
 			defer server.Close()
 			cfg := NewOAuthConfig(TikTokConfig{})
 			cfg.Endpoint.TokenURL = server.URL
