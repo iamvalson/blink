@@ -12,7 +12,7 @@ import (
 )
 
 func TestListAccountsUnauthenticated(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
 	recorder := httptest.NewRecorder()
 
@@ -24,7 +24,7 @@ func TestListAccountsUnauthenticated(t *testing.T) {
 }
 
 func TestDisconnectAccountUnauthenticated(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/twitter", nil)
 	recorder := httptest.NewRecorder()
 
@@ -36,9 +36,9 @@ func TestDisconnectAccountUnauthenticated(t *testing.T) {
 }
 
 func TestDisconnectAccountUnsupportedPlatform(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/unsupported", nil)
-	
+
 	// Add user ID to context
 	ctx := middleware.ContextWithUserID(req.Context(), "user-123")
 	req = req.WithContext(ctx)
@@ -52,10 +52,58 @@ func TestDisconnectAccountUnsupportedPlatform(t *testing.T) {
 	handler.DisconnectAccount(recorder, req)
 
 	// Since we pass nil for DB, a valid platform would panic.
-	// We expect a 500 error from the service returning unsupported platform, 
+	// We expect a 500 error from the service returning unsupported platform,
 	// wait, the service returns an error which the handler logs and returns 500.
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 for unsupported platform (service error), got %d", recorder.Code)
 	}
 }
 
+func TestGetTikTokCreatorInfoUnauthenticated(t *testing.T) {
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/acc-123/tiktok/creator-info", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.GetTikTokCreatorInfo(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized, got %d", recorder.Code)
+	}
+}
+
+func TestGetTikTokCreatorInfoMissingAccountID(t *testing.T) {
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts//tiktok/creator-info", nil)
+
+	ctx := middleware.ContextWithUserID(req.Context(), "user-123")
+	req = req.WithContext(ctx)
+
+	routeCtx := chi.NewRouteContext()
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+
+	recorder := httptest.NewRecorder()
+	handler.GetTikTokCreatorInfo(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d", recorder.Code)
+	}
+}
+
+func TestGetTikTokCreatorInfoServiceError(t *testing.T) {
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/acc-123/tiktok/creator-info", nil)
+
+	ctx := middleware.ContextWithUserID(req.Context(), "user-123")
+	req = req.WithContext(ctx)
+
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("accountID", "acc-123")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+
+	recorder := httptest.NewRecorder()
+	handler.GetTikTokCreatorInfo(recorder, req)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 Internal Server Error, got %d", recorder.Code)
+	}
+}

@@ -175,7 +175,7 @@ func run(ctx context.Context) error {
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector, tiktokConnector}
-	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, mediaHandler)
+	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, tiktokConnector, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, mediaHandler)
 
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)

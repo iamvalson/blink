@@ -2,10 +2,12 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/iamvalson/blink/internal/model"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -14,6 +16,10 @@ import (
 // The Upsert write path accepts a plain string so callers (e.g. the generic
 // auth handler) don't need to import this package just to cast a platform slug.
 type SocialPlatform string
+
+var (
+	ErrSocialAccountNotFound = errors.New("account not found")
+)
 
 const (
 	SocialPlatformTwitter SocialPlatform = "twitter"
@@ -61,6 +67,27 @@ func (r *SocialAccountRepository) Upsert(
 	}
 
 	return nil
+}
+
+func (r *SocialAccountRepository) GetByIDAndUserID(ctx context.Context, userID string, accountID string) (*model.SocialAccount, error) {
+	const query = `
+		SELECT id, user_id, platform, platform_user_id, access_token, refresh_token, expires_at, created_at, updated_at
+		FROM social_accounts
+		WHERE user_id = $1 AND id = $2
+	`
+
+	var account model.SocialAccount
+
+	err := r.db.QueryRow(ctx, query, userID, accountID).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID, &account.AccessToken, &account.RefreshToken, &account.ExpiresAt, &account.CreatedAt, &account.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrSocialAccountNotFound
+		}
+
+		return nil, fmt.Errorf("get account by ids: %w", err)
+	}
+
+	return &account, nil
 }
 
 func (r *SocialAccountRepository) ListByUserID(ctx context.Context, userID string) ([]*model.SocialAccount, error) {

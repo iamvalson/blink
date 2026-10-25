@@ -11,6 +11,7 @@ import (
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/middleware"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -32,6 +33,7 @@ func NewRouter(
 	accounts *storage.SocialAccountRepository,
 	posts *storage.PostRepository,
 	encryptionKey string,
+	tiktokConnector *tiktok.Connector,
 	frontendURL string,
 	signupService *service.SignupService,
 	loginService *service.LoginService,
@@ -101,9 +103,10 @@ func NewRouter(
 	}
 
 	// Accounts routes
-	accountsService := service.NewAccountsService(accounts)
+	accountsService := service.NewAccountsService(accounts, tiktokConnector, encryptionKey)
 	accountsHandler := handler.NewAccountsHandler(accountsService)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts", accountsHandler.ListAccounts)
+	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts/{accountID}/tiktok/creator-info", accountsHandler.GetTikTokCreatorInfo)
 	r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/accounts/{platform}", accountsHandler.DisconnectAccount)
 
 	// Post routes

@@ -2,12 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/middleware"
 	"github.com/iamvalson/blink/internal/model"
+	"github.com/iamvalson/blink/internal/storage"
 	"github.com/rs/zerolog/log"
 )
 
@@ -69,3 +71,43 @@ func (h *AccountsHandler) DisconnectAccount(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *AccountsHandler) GetTikTokCreatorInfo(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	accountID := chi.URLParam(r, "accountID")
+	if accountID == "" {
+		http.Error(w, "Account ID is required", http.StatusBadRequest)
+		return
+	}
+
+	data, err := h.service.GetTikTokCreatorInfo(r.Context(), userID, accountID)
+	if err != nil {
+		if errors.Is(err, storage.ErrSocialAccountNotFound) {
+			http.Error(w, "Account not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, service.ErrNotTikTokAccount) {
+			http.Error(w, "Account is not a TikTok account", http.StatusBadRequest)
+			return
+		}
+
+		log.Error().Err(err).Str("user_id", userID).Str("account_id", accountID).Msg("Failed to get TikTok creator info")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if data == nil {
+		http.Error(w, "TikTok creator info unavailable", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Error().Err(err).Str("user_id", userID).Msg("Failed to encode TikTok creator info")
+	}
+}

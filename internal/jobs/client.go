@@ -26,15 +26,13 @@ func NewClient(redisAddr string) (*Client, error) {
 	return &Client{client: client}, nil
 }
 
-
 func (c *Client) Enqueue(task *asynq.Task, opts ...asynq.Option) (string, error) {
 	info, err := c.client.Enqueue(task, opts...)
-	if err != nil{
+	if err != nil {
 		return "", err
 	}
 	return info.ID, nil
 }
-
 
 func (c *Client) Close() error {
 	return c.client.Close()

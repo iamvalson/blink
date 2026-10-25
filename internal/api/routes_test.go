@@ -12,7 +12,7 @@ import (
 func TestMetricsEndpoint(t *testing.T) {
 	metrics.JobProcessed(metrics.PlatformTwitter)
 	metrics.ObservePublishDuration(metrics.PlatformTwitter, 0.01)
-	router := NewRouter(nil, nil, nil, "", "", nil, nil, nil, nil, nil, false, true, http.SameSiteNoneMode)
+	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, nil, false, true, http.SameSiteNoneMode)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()
@@ -35,7 +35,7 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func TestCORSOptionsPreflight(t *testing.T) {
 	origins := []string{"http://localhost:3000"}
-	router := NewRouter(nil, nil, nil, "", "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode)
+	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode)
 
 	req := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
@@ -62,7 +62,7 @@ func TestCORSOptionsPreflight(t *testing.T) {
 
 func TestCORSOptionsPreflightIncludesLastEventID(t *testing.T) {
 	origins := []string{"http://localhost:3000"}
-	router := NewRouter(nil, nil, nil, "", "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode)
+	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode)
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/posts/123/status", nil)
 	req.Header.Set("Origin", "http://localhost:3000")

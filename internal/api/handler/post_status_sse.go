@@ -23,10 +23,10 @@ const (
 
 // terminalPostStatuses are statuses where no further status changes are expected.
 var terminalPostStatuses = map[string]bool{
-	model.StatusPublished:         true,
+	model.StatusPublished:          true,
 	model.StatusPartiallyPublished: true,
-	model.StatusFailed:            true,
-	model.StatusCancelled:         true,
+	model.StatusFailed:             true,
+	model.StatusCancelled:          true,
 }
 
 // PostStatusSSE streams server-sent events for a single post's publishing
@@ -188,4 +188,3 @@ func hasTargetChanges(prev, next *model.PostWithDetails) bool {
 func isNotFound(err error) bool {
 	return err != nil && err.Error() == service.ErrPostNotFound.Error()
 }
-
