@@ -124,11 +124,12 @@ func (s *MediaService) InitiateUpload(ctx context.Context, input InitiateUploadI
 		if len(exts) > 0 {
 			ext = exts[0]
 		} else {
-			if cleanType == "video/mp4" {
+			switch cleanType {
+			case "video/mp4":
 				ext = ".mp4"
-			} else if cleanType == "image/jpeg" {
+			case "image/jpeg":
 				ext = ".jpg"
-			} else if cleanType == "image/png" {
+			case "image/png":
 				ext = ".png"
 			}
 		}
