@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamvalson/blink/internal/connectors"
 )
 
 func TestNewOAuthConfigAndGetAuthURL(t *testing.T) {
@@ -222,5 +224,95 @@ func TestExchangeCodeForToken_NilClientSafe(t *testing.T) {
 	}
 	if token.AccessToken != "nil-client-access" {
 		t.Errorf("expected nil-client-access, got %s", token.AccessToken)
+	}
+}
+
+func TestRefreshToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected refresh request: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/x-www-form-urlencoded" {
+			t.Errorf("Content-Type = %s", got)
+		}
+		if err := r.ParseForm(); err != nil || r.Form.Get("grant_type") != "refresh_token" {
+			t.Error(err)
+		}
+		want := url.Values{"client_key": {"test-key"}, "client_secret": {"secret+&"}, "refresh_token": {"refresh_token+&"}, "grant_type": {"refresh_token"}}
+		if !reflect.DeepEqual(r.PostForm, want) {
+			t.Error("incorrect token request parameters")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"test-access","refresh_token":"test-refresh","token_type":"Bearer","expires_in":3600}`)
+
+	}))
+	defer server.Close()
+	cfg := NewOAuthConfig(TikTokConfig{ClientKey: "test-key", ClientSecret: "secret+&", RedirectURI: "https://example.com/callback"})
+	cfg.Endpoint.TokenURL = server.URL
+
+	connector := &Connector{
+		oauthConfig: cfg,
+		httpClient:  server.Client(),
+	}
+
+	result, err := connector.RefreshToken(
+		context.Background(),
+		"refresh_token+&",
+	)
+
+	if err != nil {
+		t.Fatalf("RefreshToken() returned an error: %v", err)
+	}
+
+	if result.AccessToken != "test-access" {
+		t.Errorf(
+			"AccessToken = %q, want %q",
+			result.AccessToken,
+			"test-access",
+		)
+	}
+
+	if result.RefreshToken == nil {
+		t.Fatal("expected a refresh token, got nil")
+	}
+
+	if *result.RefreshToken != "test-refresh" {
+		t.Errorf(
+			"RefreshToken = %q, want %q",
+			*result.RefreshToken,
+			"test-refresh",
+		)
+	}
+
+	if result.ExpiresAt == nil {
+		t.Fatal("expected ExpiresAt, got nil")
+	}
+
+	remaining := time.Until(*result.ExpiresAt)
+
+	if remaining < 59*time.Minute || remaining > 61*time.Minute {
+		t.Errorf(
+			"unexpected token expiry: %v remaining",
+			remaining,
+		)
+	}
+}
+
+func TestRefreshTokenInvalidGrant(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+	}))
+	defer server.Close()
+
+	connector := New(TikTokConfig{})
+	connector.oauthConfig.Endpoint.TokenURL = server.URL
+	_, err := connector.RefreshToken(context.Background(), "revoked")
+	if !errors.Is(err, connectors.ErrInvalidRefreshToken) {
+		t.Fatalf(
+			"expected ErrInvalidRefreshToken, got %v",
+			err,
+		)
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 func TestListAccountsUnauthenticated(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, nil))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
 	recorder := httptest.NewRecorder()
 
@@ -24,7 +24,7 @@ func TestListAccountsUnauthenticated(t *testing.T) {
 }
 
 func TestDisconnectAccountUnauthenticated(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, nil))
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/twitter", nil)
 	recorder := httptest.NewRecorder()
 
@@ -36,7 +36,7 @@ func TestDisconnectAccountUnauthenticated(t *testing.T) {
 }
 
 func TestDisconnectAccountUnsupportedPlatform(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, nil))
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/unsupported", nil)
 
 	// Add user ID to context
@@ -60,7 +60,7 @@ func TestDisconnectAccountUnsupportedPlatform(t *testing.T) {
 }
 
 func TestGetTikTokCreatorInfoUnauthenticated(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, nil))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/acc-123/tiktok/creator-info", nil)
 	recorder := httptest.NewRecorder()
 
@@ -72,7 +72,7 @@ func TestGetTikTokCreatorInfoUnauthenticated(t *testing.T) {
 }
 
 func TestGetTikTokCreatorInfoMissingAccountID(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, nil))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts//tiktok/creator-info", nil)
 
 	ctx := middleware.ContextWithUserID(req.Context(), "user-123")
@@ -90,7 +90,7 @@ func TestGetTikTokCreatorInfoMissingAccountID(t *testing.T) {
 }
 
 func TestGetTikTokCreatorInfoServiceError(t *testing.T) {
-	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, ""))
+	handler := NewAccountsHandler(service.NewAccountsService(nil, nil, nil))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/acc-123/tiktok/creator-info", nil)
 
 	ctx := middleware.ContextWithUserID(req.Context(), "user-123")

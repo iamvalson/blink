@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
@@ -18,11 +17,11 @@ var (
 type AccountsService struct {
 	accounts        *storage.SocialAccountRepository
 	tiktokConnector *tiktok.Connector
-	encryptionKey   string
+	tokenManager    *TokenManagerService
 }
 
-func NewAccountsService(accounts *storage.SocialAccountRepository, tiktokConnector *tiktok.Connector, encryptionKey string) *AccountsService {
-	return &AccountsService{accounts: accounts, tiktokConnector: tiktokConnector, encryptionKey: encryptionKey}
+func NewAccountsService(accounts *storage.SocialAccountRepository, tiktokConnector *tiktok.Connector, tokenManager *TokenManagerService) *AccountsService {
+	return &AccountsService{accounts: accounts, tiktokConnector: tiktokConnector, tokenManager: tokenManager}
 }
 
 func (s *AccountsService) ListAccounts(ctx context.Context, userID string) ([]*model.SocialAccount, error) {
@@ -44,7 +43,14 @@ func (s *AccountsService) GetTikTokCreatorInfo(ctx context.Context, userID strin
 	if s.tiktokConnector == nil {
 		return nil, errors.New("tiktok connector is not configured")
 	}
+	if s.tokenManager == nil {
+		return nil, errors.New(
+			"token manager is not configured",
+		)
+	}
 
+	// Verify that the account belongs to the user
+	// and is connected to TikTok.
 	account, err := s.accounts.GetByIDAndUserID(ctx, userID, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account: %w", err)
@@ -54,12 +60,17 @@ func (s *AccountsService) GetTikTokCreatorInfo(ctx context.Context, userID strin
 		return nil, ErrNotTikTokAccount
 	}
 
-	decryptedToken, err := auth.DecryptToken(account.AccessToken, s.encryptionKey)
+	// Retrieve a valid decrypted access token.
+	accessToken, err := s.tokenManager.GetValidAccessToken(ctx, accountID, userID, s.tiktokConnector)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt token: %w", err)
+		return nil, fmt.Errorf(
+			"failed to get valid TikTok access token: %w",
+			err,
+		)
 	}
 
-	data, err := s.tiktokConnector.QueryCreatorInfo(ctx, decryptedToken)
+	// Query TikTok using the valid access token.
+	data, err := s.tiktokConnector.QueryCreatorInfo(ctx, accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get TikTok creator info: %w", err)
 	}

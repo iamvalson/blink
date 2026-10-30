@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/iamvalson/blink/internal/api/service"
+	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/middleware"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
@@ -92,6 +93,17 @@ func (h *AccountsHandler) GetTikTokCreatorInfo(w http.ResponseWriter, r *http.Re
 		}
 		if errors.Is(err, service.ErrNotTikTokAccount) {
 			http.Error(w, "Account is not a TikTok account", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, connectors.ErrInvalidRefreshToken) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":         "Account reconnect required: refresh token is invalid or revoked",
+				"code":          "ACCOUNT_RECONNECT_REQUIRED",
+				"platform":      "tiktok",
+				"reconnect_url": "/auth/tiktok",
+			})
 			return
 		}
 

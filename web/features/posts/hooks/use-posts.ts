@@ -11,10 +11,12 @@ export const postsQueryKey = (filter?: ListPostsFilter) =>
 
 export const postQueryKey = (id: string) => ["posts", id] as const;
 
-export function usePosts(filter: ListPostsFilter = {}) {
+export function usePosts(filter: ListPostsFilter = {}, refetchInterval?: number | false) {
   return useQuery({
     queryKey: postsQueryKey(filter),
     queryFn: () => listPosts(filter),
+    refetchInterval: refetchInterval ?? false,
+    refetchIntervalInBackground: false,
   });
 }
 

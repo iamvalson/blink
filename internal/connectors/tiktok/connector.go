@@ -21,6 +21,7 @@ type Connector struct {
 }
 
 var _ connectors.OAuthConnector = (*Connector)(nil)
+var _ connectors.OAuthTokenRefresher = (*Connector)(nil)
 
 // New creates a new TikTok connector
 func New(cfg TikTokConfig, client ...*http.Client) *Connector {

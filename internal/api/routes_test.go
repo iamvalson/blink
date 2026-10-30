@@ -12,7 +12,7 @@ import (
 func TestMetricsEndpoint(t *testing.T) {
 	metrics.JobProcessed(metrics.PlatformTwitter)
 	metrics.ObservePublishDuration(metrics.PlatformTwitter, 0.01)
-	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, nil, false, true, http.SameSiteNoneMode)
+	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, nil, false, true, http.SameSiteNoneMode, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()
@@ -35,7 +35,7 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func TestCORSOptionsPreflight(t *testing.T) {
 	origins := []string{"http://localhost:3000"}
-	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode)
+	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode, nil)
 
 	req := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
@@ -62,7 +62,7 @@ func TestCORSOptionsPreflight(t *testing.T) {
 
 func TestCORSOptionsPreflightIncludesLastEventID(t *testing.T) {
 	origins := []string{"http://localhost:3000"}
-	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode)
+	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode, nil)
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/posts/123/status", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
@@ -74,5 +74,27 @@ func TestCORSOptionsPreflightIncludesLastEventID(t *testing.T) {
 
 	if resp.Code != http.StatusOK && resp.Code != http.StatusNoContent {
 		t.Fatalf("expected preflight status 200 or 204, got %d", resp.Code)
+	}
+}
+
+func TestCORSOptionsPreflightIncludesNgrokSkipBrowserWarning(t *testing.T) {
+	origins := []string{"http://localhost:3000"}
+	router := NewRouter(nil, nil, nil, "", nil, "", nil, nil, nil, nil, origins, false, true, http.SameSiteNoneMode, nil)
+
+	req := httptest.NewRequest(http.MethodOptions, "/auth/me", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, ngrok-skip-browser-warning")
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK && resp.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight status 200 or 204, got %d", resp.Code)
+	}
+
+	allowOrigin := resp.Header().Get("Access-Control-Allow-Origin")
+	if allowOrigin != "http://localhost:3000" {
+		t.Errorf("expected Access-Control-Allow-Origin to be 'http://localhost:3000', got %q", allowOrigin)
 	}
 }

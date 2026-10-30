@@ -43,6 +43,7 @@ func NewRouter(
 	secureCookie bool,
 	cookieSecure bool,
 	cookieSameSite http.SameSite,
+	tokenManager *service.TokenManagerService,
 	mediaHandlers ...*handler.MediaHandler,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -51,7 +52,7 @@ func NewRouter(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   corsOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "Idempotency-Key", "Last-Event-ID"},
+		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -103,7 +104,7 @@ func NewRouter(
 	}
 
 	// Accounts routes
-	accountsService := service.NewAccountsService(accounts, tiktokConnector, encryptionKey)
+	accountsService := service.NewAccountsService(accounts, tiktokConnector, tokenManager)
 	accountsHandler := handler.NewAccountsHandler(accountsService)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts", accountsHandler.ListAccounts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts/{accountID}/tiktok/creator-info", accountsHandler.GetTikTokCreatorInfo)

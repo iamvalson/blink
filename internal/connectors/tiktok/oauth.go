@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamvalson/blink/internal/connectors"
 	"golang.org/x/oauth2"
 )
 
@@ -134,4 +135,95 @@ func ExchangeCodeForToken(ctx context.Context, oauthConfig *oauth2.Config, code 
 		"scope":              tokenResponse.Scope,
 		"refresh_expires_in": tokenResponse.RefreshExpiresIn,
 	}), nil
+}
+
+// RefreshToken uses TikTok's OAuth token endpoint.
+
+func (c *Connector) RefreshToken(ctx context.Context, refreshToken string) (connectors.TokenResult, error) {
+	v := url.Values{
+		"client_key":    {c.oauthConfig.ClientID},
+		"client_secret": {c.oauthConfig.ClientSecret},
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+	}
+
+	body := strings.NewReader(v.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.oauthConfig.Endpoint.TokenURL, body)
+
+	if err != nil {
+		return connectors.TokenResult{}, fmt.Errorf("create TikTok token request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	hc := c.httpClient
+	if hc == nil {
+		hc = &http.Client{Timeout: 15 * time.Second}
+	}
+
+	res, err := hc.Do(req)
+
+	if err != nil {
+		return connectors.TokenResult{}, fmt.Errorf("send TikTok token request: %w", err)
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		var errorResponse struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+		}
+
+		if err := json.NewDecoder(res.Body).Decode(&errorResponse); err != nil {
+			return connectors.TokenResult{}, fmt.Errorf(
+				"%w: TikTok returned HTTP %d with an unreadable error response",
+				connectors.ErrTokenRefreshFailed,
+				res.StatusCode,
+			)
+		}
+
+		if errorResponse.Error == "invalid_grant" {
+			return connectors.TokenResult{}, connectors.ErrInvalidRefreshToken
+		}
+
+		return connectors.TokenResult{}, fmt.Errorf(
+			"%w: TikTok token endpoint returned HTTP %d (error: %s)",
+			connectors.ErrTokenRefreshFailed,
+			res.StatusCode,
+			errorResponse.Error,
+		)
+	}
+
+	// TikTok OAuth Token Response
+	var tokenResponse TikTokTokenResponse
+
+	err = json.NewDecoder(res.Body).Decode(&tokenResponse)
+
+	if err != nil {
+		return connectors.TokenResult{}, fmt.Errorf("decode TikTok token response: %w", err)
+	}
+	if strings.TrimSpace(tokenResponse.AccessToken) == "" {
+		return connectors.TokenResult{}, fmt.Errorf("TikTok token response has an empty access token")
+	}
+	// Bound seconds before converting to nanoseconds to avoid duration overflow.
+	if tokenResponse.ExpiresIn <= 0 || tokenResponse.ExpiresIn > math.MaxInt64/int64(time.Second) {
+		return connectors.TokenResult{}, fmt.Errorf("TikTok token response has an invalid expires_in")
+	}
+
+	expiry := time.Now().Add(
+		time.Duration(tokenResponse.ExpiresIn) * time.Second,
+	)
+
+	result := connectors.TokenResult{
+		AccessToken: tokenResponse.AccessToken,
+		ExpiresAt:   &expiry,
+	}
+
+	if tokenResponse.RefreshToken != "" {
+		result.RefreshToken = &tokenResponse.RefreshToken
+	}
+
+	return result, nil
 }
