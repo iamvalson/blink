@@ -20,7 +20,6 @@ import (
 const testEncryptionKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 type concurrentTestRefresher struct {
-	mu           sync.Mutex
 	refreshCalls atomic.Int32
 	delay        time.Duration
 	tokenPrefix  string

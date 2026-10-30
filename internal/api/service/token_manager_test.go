@@ -24,8 +24,6 @@ func mustEncrypt(t *testing.T, plaintext string) string {
 	return s
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // ─── Stub OAuthTokenRefresher ────────────────────────────────────────────────
 
 type stubRefresher struct {
