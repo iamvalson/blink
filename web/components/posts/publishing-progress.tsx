@@ -11,7 +11,7 @@ import {
   RefreshCcw,
 } from "lucide-react";
 import Link from "next/link";
-import { siYoutube, siX } from "simple-icons";
+import { siYoutube, siX, siTiktok } from "simple-icons";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 interface PublishingProgressProps {
@@ -45,7 +45,25 @@ function PlatformIcon({ platform }: { platform: string }) {
       </svg>
     );
   }
+  if (platform === "tiktok") {
+    return (
+      <svg
+        role="img"
+        viewBox="0 0 24 24"
+        className="h-3.5 w-3.5 fill-current"
+        aria-hidden
+      >
+        <path d={siTiktok.path} />
+      </svg>
+    );
+  }
   return null;
+}
+
+function platformDisplayName(platform: string): string {
+  if (platform === "twitter") return "X";
+  if (platform === "tiktok") return "TikTok";
+  return platform.charAt(0).toUpperCase() + platform.slice(1);
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -168,8 +186,8 @@ export function PublishingProgress({
             >
               <div className="flex items-center gap-2 min-w-0">
                 <PlatformIcon platform={target.platform} />
-                <span className="text-xs font-medium capitalize truncate">
-                  {target.platform === "twitter" ? "X" : target.platform}
+                <span className="text-xs font-medium truncate">
+                  {platformDisplayName(target.platform)}
                 </span>
                 {target.platform_user_id && (
                   <span className="text-xs text-muted-foreground truncate">
@@ -206,8 +224,8 @@ export function PublishingProgress({
                 key={t.id}
                 className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
               >
-                <span className="font-medium capitalize">
-                  {t.platform === "twitter" ? "X" : t.platform}:
+                <span className="font-medium">
+                  {platformDisplayName(t.platform)}:
                 </span>{" "}
                 {t.error_message}
               </div>
@@ -241,7 +259,7 @@ export function PublishingProgress({
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
                 >
-                  View on {t.platform === "twitter" ? "X" : t.platform}
+                  View on {platformDisplayName(t.platform)}
                   <ExternalLink className="h-3 w-3" />
                 </a>
               ))}

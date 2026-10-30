@@ -1,7 +1,8 @@
 "use client";
 
 import { deletePost, retryPost } from "@/features/posts/api/create-post";
-import { usePosts } from "@/features/posts/hooks/use-posts";
+import { usePosts, postsQueryKey } from "@/features/posts/hooks/use-posts";
+import { usePostStatusStream } from "@/features/posts/hooks/use-post-status-stream";
 import type { ListPostsFilter, PostResponse } from "@/types/post";
 import {
   AlertCircle,
@@ -18,12 +19,11 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { siX, siYoutube } from "simple-icons";
+import { siTiktok, siX, siYoutube } from "simple-icons";
 import { formatDistanceToNow } from "date-fns";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { FormatBadge, StatusBadge } from "@/components/posts/status-badge";
-import { postsQueryKey } from "@/features/posts/hooks/use-posts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +31,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const TERMINAL_STATUSES = new Set([
+  "PUBLISHED",
+  "PARTIALLY_PUBLISHED",
+  "FAILED",
+  "CANCELLED",
+]);
 
 // ─── Platform icon ────────────────────────────────────────────────────────────
 
@@ -41,7 +50,14 @@ function PlatformIcon({
   platform: string;
   className?: string;
 }) {
-  const icon = platform === "youtube" ? siYoutube : platform === "twitter" ? siX : null;
+  const icon =
+    platform === "youtube"
+      ? siYoutube
+      : platform === "twitter"
+        ? siX
+        : platform === "tiktok"
+          ? siTiktok
+          : null;
   if (!icon) return null;
   return (
     <svg
@@ -69,6 +85,7 @@ const PLATFORM_FILTERS = [
   { value: "", label: "All platforms" },
   { value: "youtube", label: "YouTube" },
   { value: "twitter", label: "X" },
+  { value: "tiktok", label: "TikTok" },
 ];
 
 // ─── Post card ────────────────────────────────────────────────────────────────
@@ -86,10 +103,28 @@ function PostCard({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
 
+  // Open an SSE stream for every non-terminal post.
+  // usePostStatusStream invalidates postsQueryKey() on every status event,
+  // which re-fetches the list query — giving us live status changes.
+  const isTerminal = TERMINAL_STATUSES.has(post.status);
+  usePostStatusStream(post.id, !isTerminal);
+
   const caption = post.caption ?? post.title ?? "(no caption)";
   const platform = post.targets?.[0]?.platform ?? "unknown";
   const platformUrl = post.targets?.find((t) => t.platform_url)?.platform_url;
   const failedTarget = post.targets?.find((t) => t.status === "FAILED");
+  const isReconnectRequired =
+    failedTarget?.error_code === "ACCOUNT_RECONNECT_REQUIRED" ||
+    failedTarget?.error_message?.toLowerCase().includes("refresh token is invalid or revoked") ||
+    failedTarget?.error_message?.toLowerCase().includes("invalid_grant");
+
+  const reconnectPlatform = failedTarget?.platform || platform;
+
+  const handleReconnect = () => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+    toast.info(`Redirecting to reconnect ${reconnectPlatform === "twitter" ? "X" : reconnectPlatform}...`);
+    window.location.href = `${apiUrl}/auth/${reconnectPlatform}`;
+  };
 
   const canDelete =
     post.status !== "QUEUED" && post.status !== "PUBLISHING" && post.status !== "PROCESSING";
@@ -103,8 +138,7 @@ function PostCard({
       toast.success("Post deleted.");
       onDeleted();
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Could not delete the post.";
+      const msg = err instanceof Error ? err.message : "Could not delete the post.";
       toast.error(msg);
     } finally {
       setIsDeleting(false);
@@ -118,8 +152,7 @@ function PostCard({
       toast.success("Post requeued for publishing.");
       onRetried();
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Could not retry the post.";
+      const msg = err instanceof Error ? err.message : "Could not retry the post.";
       toast.error(msg);
     } finally {
       setIsRetrying(false);
@@ -166,7 +199,11 @@ function PostCard({
                   className="h-3 w-3 fill-current"
                 />
                 <span className="capitalize">
-                  {target.platform === "twitter" ? "X" : target.platform}
+                  {target.platform === "twitter"
+                    ? "X"
+                    : target.platform === "tiktok"
+                      ? "TikTok"
+                      : target.platform}
                 </span>
                 <StatusBadge status={target.status} />
               </div>
@@ -174,17 +211,33 @@ function PostCard({
           </div>
         )}
 
-        {/* Error message */}
-        {failedTarget?.error_message && (
+        {/* Error / reconnect */}
+        {isReconnectRequired ? (
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-md bg-amber-500/10 border border-amber-500/20 p-2.5 text-xs text-amber-800 dark:text-amber-300">
+            <div className="flex items-center gap-1.5 font-medium">
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>
+                {reconnectPlatform === "twitter" ? "X" : reconnectPlatform.toUpperCase()} authorization expired. Reconnect Blink to publish.
+              </span>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs border-amber-500/30 hover:bg-amber-500/10 text-amber-900 dark:text-amber-200"
+              onClick={handleReconnect}
+            >
+              Reconnect {reconnectPlatform === "twitter" ? "X" : reconnectPlatform}
+            </Button>
+          </div>
+        ) : failedTarget?.error_message ? (
           <p className="text-xs text-red-600 line-clamp-2">
             {failedTarget.error_message}
           </p>
-        )}
+        ) : null}
 
         <p className="text-xs text-muted-foreground">
-          {formatDistanceToNow(new Date(post.created_at), {
-            addSuffix: true,
-          })}
+          {formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}
         </p>
       </div>
 
@@ -213,6 +266,16 @@ function PostCard({
             <DropdownMenuItem onClick={() => router.push(`/posts/${post.id}`)}>
               View details
             </DropdownMenuItem>
+
+            {isReconnectRequired && (
+              <DropdownMenuItem
+                onClick={handleReconnect}
+                className="gap-2 text-amber-600 dark:text-amber-400 focus:text-amber-700"
+              >
+                <RefreshCcw className="h-3.5 w-3.5" />
+                Reconnect {reconnectPlatform === "twitter" ? "X" : reconnectPlatform}
+              </DropdownMenuItem>
+            )}
 
             {canRetry && (
               <DropdownMenuItem
@@ -284,10 +347,17 @@ export function PostsList() {
   const [filter, setFilter] = useState<ListPostsFilter>({ limit: 50 });
   const queryClient = useQueryClient();
 
+  // Primary fetch — also used as the SSE invalidation target.
   const { data, isLoading, isError, refetch } = usePosts(filter);
 
   const posts = data?.posts ?? [];
   const total = data?.total ?? 0;
+
+  // Poll every 5 s as long as any visible post is still in-flight.
+  // Each PostCard also opens its own SSE stream for immediate updates;
+  // polling is a safety net for proxies that buffer SSE or dropped connections.
+  const hasInFlight = posts.some((p) => !TERMINAL_STATUSES.has(p.status));
+  usePosts(filter, hasInFlight ? 5000 : false);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: postsQueryKey(filter) });

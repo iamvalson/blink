@@ -11,10 +11,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	apiservice "github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/jobs"
@@ -59,11 +61,20 @@ type PublishProcessor struct {
 	scheduler     publishScheduler
 	mediaRepo     mediaRepository
 	mediaStore    mediaStore
+	tokenManager  *apiservice.TokenManagerService
 }
 
 func (p *PublishProcessor) WithMediaStore(repo mediaRepository, store mediaStore) *PublishProcessor {
 	p.mediaRepo = repo
 	p.mediaStore = store
+	return p
+}
+
+// WithTokenManager wires the shared database-backed token manager.
+// When set, cross-process token refresh coordination uses PostgreSQL row locks
+// instead of the fallback in-process sync.Map.
+func (p *PublishProcessor) WithTokenManager(tm *apiservice.TokenManagerService) *PublishProcessor {
+	p.tokenManager = tm
 	return p
 }
 
@@ -317,7 +328,11 @@ func (p *PublishProcessor) publishToTarget(
 		if recoveryRequired {
 			return p.requireManualReview(ctx, attempt.ID, "Credentials unavailable for reconciliation: "+redactSensitive(err.Error()))
 		}
-		_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", err.Error())
+		errorCode := "TOKEN_REFRESH_FAILED"
+		if errors.Is(err, connectors.ErrInvalidRefreshToken) {
+			errorCode = "ACCOUNT_RECONNECT_REQUIRED"
+		}
+		_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, errorCode, err.Error())
 		return newPublishError(connectors.ClassifyError(err), err)
 	}
 
@@ -435,7 +450,11 @@ func (p *PublishProcessor) publishToTarget(
 			var refreshErr error
 			accessToken, refreshed, refreshErr = p.refreshAccessToken(ctx, account, connector)
 			if refreshErr != nil {
-				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", refreshErr.Error())
+				errorCode := "TOKEN_REFRESH_FAILED"
+				if errors.Is(refreshErr, connectors.ErrInvalidRefreshToken) {
+					errorCode = "ACCOUNT_RECONNECT_REQUIRED"
+				}
+				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, errorCode, refreshErr.Error())
 				return newPublishError(connectors.ClassifyError(refreshErr), refreshErr)
 			}
 			mediaID, uploadErr = connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaRecord.ContentType)
@@ -508,7 +527,11 @@ func (p *PublishProcessor) publishToTarget(
 			var refreshErr error
 			accessToken, refreshed, refreshErr = p.refreshAccessToken(ctx, account, connector)
 			if refreshErr != nil {
-				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, "TOKEN_REFRESH_FAILED", refreshErr.Error())
+				errorCode := "TOKEN_REFRESH_FAILED"
+				if errors.Is(refreshErr, connectors.ErrInvalidRefreshToken) {
+					errorCode = "ACCOUNT_RECONNECT_REQUIRED"
+				}
+				_ = p.publications.MarkAttemptFailed(ctx, attempt.ID, errorCode, refreshErr.Error())
 				return newPublishError(connectors.ClassifyError(refreshErr), refreshErr)
 			}
 			mediaID, uploadErr = connector.UploadMedia(ctx, accessToken, attempt.ID.String(), tempFile, mediaType)
@@ -587,6 +610,42 @@ func (p *PublishProcessor) requireManualReview(ctx context.Context, attemptID uu
 }
 
 func (p *PublishProcessor) ensureAccessToken(ctx context.Context, account *model.SocialAccount, connector connectors.PlatformConnector) (string, bool, error) {
+	// When a database-backed token manager is wired, use it for cross-process
+	// coordination via PostgreSQL row locks. This prevents duplicate token
+	// rotation when both the API and worker race to refresh the same token.
+	if p.tokenManager != nil {
+		if refresher, ok := connector.(connectors.OAuthTokenRefresher); ok {
+			token, err := p.tokenManager.GetValidAccessToken(
+				ctx,
+				account.ID.String(),
+				account.UserID.String(),
+				refresher,
+			)
+			if err != nil {
+				return "", false, err
+			}
+			// Determine whether a refresh actually happened (token changed).
+			currentPlain, _ := auth.DecryptToken(account.AccessToken, p.encryptionKey)
+			refreshed := currentPlain != token
+			if refreshed {
+				metrics.TokenRefresh(account.Platform, "success")
+			}
+			return token, refreshed, nil
+		}
+		// Connector does not support refresh; just decrypt the stored token.
+		accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
+		if err != nil {
+			return "", false, connectors.ErrTokenDecryptFailed
+		}
+		return accessToken, false, nil
+	}
+
+	// Refuse silent fallback to process-local mutexes in production.
+	if !testing.Testing() {
+		return "", false, errors.New("token manager is not configured; refusing process-local mutex fallback in production")
+	}
+
+	// Fallback: in-process path used only in tests without live database.
 	accessToken, err := auth.DecryptToken(account.AccessToken, p.encryptionKey)
 	if err != nil {
 		return "", false, connectors.ErrTokenDecryptFailed
@@ -598,6 +657,48 @@ func (p *PublishProcessor) ensureAccessToken(ctx context.Context, account *model
 }
 
 func (p *PublishProcessor) refreshAccessToken(ctx context.Context, account *model.SocialAccount, connector connectors.PlatformConnector) (string, bool, error) {
+	// When the database-backed token manager is wired, use ForceRefreshAccessToken.
+	// This acquires a PostgreSQL row lock so only one process refreshes at a time,
+	// and skips the refresh if another process already replaced the rejected token.
+	if p.tokenManager != nil {
+		refreshLogger := logger.WithJobContext("", "", account.UserID.String(), account.Platform, 0)
+		refreshLogger.Info().Str("event", "oauth_refresh_started").Str("status", "started").Msg("oauth refresh started")
+		start := time.Now()
+		refreshResult := "failure"
+		defer func() {
+			metrics.TokenRefresh(account.Platform, refreshResult)
+		}()
+
+		if refresher, ok := connector.(connectors.OAuthTokenRefresher); ok {
+			currentPlain, decErr := auth.DecryptToken(account.AccessToken, p.encryptionKey)
+			if decErr != nil {
+				currentPlain = ""
+			}
+			token, err := p.tokenManager.ForceRefreshAccessToken(
+				ctx,
+				account.ID.String(),
+				account.UserID.String(),
+				currentPlain,
+				refresher,
+			)
+			if err != nil {
+				refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(err)).Msg("oauth refresh failed")
+				return "", false, err
+			}
+			refreshResult = "success"
+			refreshLogger.Info().Str("event", "oauth_refresh_succeeded").Str("status", "success").Dur("duration", time.Since(start)).Msg("oauth refresh succeeded")
+			return token, true, nil
+		}
+		refreshLogger.Error().Str("event", "oauth_refresh_failed").Str("status", "failed").Dur("duration", time.Since(start)).Err(logger.RedactError(connectors.ErrInvalidRefreshToken)).Msg("oauth refresh failed: connector does not support refresh")
+		return "", false, connectors.ErrInvalidRefreshToken
+	}
+
+	// Refuse silent fallback to process-local mutexes in production.
+	if !testing.Testing() {
+		return "", false, errors.New("token manager is not configured; refusing process-local mutex fallback in production")
+	}
+
+	// Fallback: in-process path used only in tests without live database.
 	lockValue, _ := oauthRefreshLocks.LoadOrStore(account.ID, &sync.Mutex{})
 	lock := lockValue.(*sync.Mutex)
 	lock.Lock()
@@ -749,6 +850,15 @@ func failureDetails(cause error) (string, string, string, []byte) {
 		statusCode = classified.StatusCode
 		if strings.Contains(strings.ToUpper(classified.Code), "AUTH") || strings.Contains(strings.ToUpper(classified.Code), "TOKEN") {
 			failureType = "AUTHENTICATION"
+		}
+	}
+	if errors.Is(cause, connectors.ErrInvalidRefreshToken) {
+		failureType = "AUTHENTICATION"
+		code = "ACCOUNT_RECONNECT_REQUIRED"
+	} else if errors.Is(cause, connectors.ErrInvalidToken) || errors.Is(cause, connectors.ErrAuthFailed) || errors.Is(cause, connectors.ErrTokenExpired) {
+		failureType = "AUTHENTICATION"
+		if code == "PUBLISH_FAILED" {
+			code = "AUTH_FAILED"
 		}
 	}
 	reason := redactSensitive(cause.Error())

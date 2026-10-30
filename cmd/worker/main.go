@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
@@ -52,7 +53,14 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("DATABASE_URL environment variable not set")
 	}
 
-	db, err := pgxpool.New(context.Background(), dbURL)
+	poolConfig, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		return fmt.Errorf("parse database url: %w", err)
+	}
+	if poolConfig.MaxConns < 25 {
+		poolConfig.MaxConns = 25
+	}
+	db, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -100,6 +108,13 @@ func run(ctx context.Context) error {
 	// Create repositories
 	postsRepo := storage.NewPostRepository(db)
 	publicationsRepo := storage.NewPublicationRepository(db)
+	socialAccountRepo := storage.NewSocialAccountRepository(db)
+
+	tokenManager := service.NewTokenManagerService(
+		socialAccountRepo,
+		db,
+		encryptionKey,
+	)
 
 	// Create platform connectors
 	var twitterConnector connectors.PlatformConnector
@@ -147,7 +162,7 @@ func run(ctx context.Context) error {
 	// Create and register handler
 	mux := asynq.NewServeMux()
 	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey, retryClient).
-		WithMediaStore(mediaRepo, mediaStore)
+		WithMediaStore(mediaRepo, mediaStore).WithTokenManager(tokenManager)
 
 	mux.HandleFunc(jobs.TypePublishPost, processor.ProcessPublishJob)
 

@@ -255,4 +255,3 @@ func isNotFoundError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "NotFound") || strings.Contains(msg, "NoSuchKey") || strings.Contains(msg, "404")
 }
-

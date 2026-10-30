@@ -56,4 +56,3 @@ func TestCreatePostValidationErrors(t *testing.T) {
 		}
 	})
 }
-

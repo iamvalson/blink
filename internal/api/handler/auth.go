@@ -193,7 +193,13 @@ func (h *AuthHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authURL := h.connector.AuthCodeURL(state, verifier)
+	authURL, err := h.connector.AuthCodeURL(state, verifier)
+
+	if err != nil {
+		http.Error(w, "Failed to generate authorization URL", http.StatusInternalServerError)
+		return
+	}
+
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 

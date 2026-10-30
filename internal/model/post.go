@@ -112,15 +112,13 @@ type PostWithDetails struct {
 	UpdatedAt            time.Time          `json:"updated_at"`
 }
 
-
 type IdempotencyRecord struct {
-	ID uuid.UUID 
-	RequestHash string 
-	Status string 
-	ResourceType *string 
-	ResourceID *uuid.UUID 
-	ResponseStatus *int 
-	ResponseBody []byte 
-	ExpiresAt time.Time
+	ID             uuid.UUID
+	RequestHash    string
+	Status         string
+	ResourceType   *string
+	ResourceID     *uuid.UUID
+	ResponseStatus *int
+	ResponseBody   []byte
+	ExpiresAt      time.Time
 }
-

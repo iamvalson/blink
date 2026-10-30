@@ -51,8 +51,7 @@ func EncryptToken(token string, key string) (string, error) {
 	return hex.EncodeToString(ciphertext), nil
 }
 
-
-func DecryptToken(encryted string, key string) (string, error){
+func DecryptToken(encryted string, key string) (string, error) {
 	keyBytes, err := normalizeKey(key)
 	if err != nil {
 		return "", err
@@ -69,7 +68,7 @@ func DecryptToken(encryted string, key string) (string, error){
 	}
 
 	ciphertext, err := hex.DecodeString(encryted)
-	if err != nil{
+	if err != nil {
 		return "", err
 	}
 

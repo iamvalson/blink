@@ -35,4 +35,3 @@ func InitStore(cfg *config.Config) (Store, error) {
 		return NewLocalStore(cfg.MediaStoragePath)
 	}
 }
-

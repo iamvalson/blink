@@ -52,7 +52,7 @@ export function PostComposer() {
             .map((account) => account.platform)
             .filter(
               (platform): platform is Platform =>
-                platform === "twitter" || platform === "youtube",
+                platform === "twitter" || platform === "youtube" || platform === "tiktok",
             ),
         ),
       ),

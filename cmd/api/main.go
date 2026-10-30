@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
@@ -67,7 +69,23 @@ func run(ctx context.Context) error {
 	}
 	youtubeConnector := youtube.New(youtubeCfg)
 
-	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	// Initialize TikTok connector
+	tiktokCfg := tiktok.TikTokConfig{
+		ClientKey:    os.Getenv("TIKTOK_CLIENT_KEY"),
+		ClientSecret: os.Getenv("TIKTOK_CLIENT_SECRET"),
+		RedirectURI:  os.Getenv("TIKTOK_REDIRECT_URI"),
+		Scopes:       strings.Split(os.Getenv("TIKTOK_SCOPES"), ","),
+	}
+	tiktokConnector := tiktok.New(tiktokCfg)
+
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("parse database url: %w", err)
+	}
+	if poolConfig.MaxConns < 25 {
+		poolConfig.MaxConns = 25
+	}
+	db, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -79,9 +97,14 @@ func run(ctx context.Context) error {
 	if err := db.Ping(context.Background()); err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
-	accounts := storage.NewSocialAccountRepository(db)
-	users := storage.NewUserRepository(db)
-	posts := storage.NewPostRepository(db)
+	socialAccountRepo := storage.NewSocialAccountRepository(db)
+	tokenManager := service.NewTokenManagerService(
+		socialAccountRepo,
+		db,
+		cfg.EncryptionKey,
+	)
+	usersRepo := storage.NewUserRepository(db)
+	postsRepo := storage.NewPostRepository(db)
 	outboxRepo := storage.NewOutboxRepository(db)
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -89,9 +112,9 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("generate JWT keys: %w", err)
 	}
 	jwtService := auth.NewJWTService(privateKey, publicKey)
-	signupService := service.NewSignupService(users, jwtService)
-	loginService := service.NewLoginService(users, jwtService)
-	meService := service.NewMeService(users)
+	signupService := service.NewSignupService(usersRepo, jwtService)
+	loginService := service.NewLoginService(usersRepo, jwtService)
+	meService := service.NewMeService(usersRepo)
 
 	// Initialize Redis for Asynq job queue
 	redisURL := os.Getenv("REDIS_URL")
@@ -112,7 +135,7 @@ func run(ctx context.Context) error {
 	}()
 
 	// Initialize outbox & schedule dispatcher
-	dispatcher := outbox.NewDispatcher(outboxRepo, jobsClient).WithPostRepository(posts)
+	dispatcher := outbox.NewDispatcher(outboxRepo, jobsClient).WithPostRepository(postsRepo)
 
 	// Start outbox dispatcher in background (runs every 5 seconds)
 	var dispatcherWG sync.WaitGroup
@@ -163,8 +186,8 @@ func run(ctx context.Context) error {
 	//
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
-	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector}
-	router := api.NewRouter(oauthConnectors, accounts, posts, cfg.EncryptionKey, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, mediaHandler)
+	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector, tiktokConnector}
+	router := api.NewRouter(oauthConnectors, socialAccountRepo, postsRepo, cfg.EncryptionKey, tiktokConnector, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, tokenManager, mediaHandler)
 
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)

@@ -10,7 +10,7 @@ import (
 // ErrorHandler catches panics
 func ErrorHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func ()  {
+		defer func() {
 			if err := recover(); err != nil {
 				log.Error().Interface("panic", err).Msg("Request panic")
 				w.Header().Set("Content-Type", "application/json")
@@ -21,7 +21,7 @@ func ErrorHandler(next http.Handler) http.Handler {
 					log.Error().Err(err).Msg("Failed to encode panic response")
 				}
 			}
-		} ()
+		}()
 		next.ServeHTTP(w, r)
 	})
 }
