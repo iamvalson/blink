@@ -1,7 +1,7 @@
-include .env
+-include .env
 export
 
-.PHONY: up down logs run-api run-worker migrate-up migrate-down db-setup db-reset
+.PHONY: up down logs ps run-api run-worker migrate-up migrate-down migrate-status migrate-baseline keygen images db-setup db-reset
 
 up:
 	docker compose -f infra/docker-compose.yml up -d --wait
@@ -21,21 +21,29 @@ run-api:
 run-worker:
 	go run cmd/worker/main.go
 
+# The runner embeds SQL files, tracks versions/dirty state, and locks migrations.
 migrate-up:
-	@echo "Running migrations..."
-	@for f in $(shell ls migrations/*.up.sql | sort); do \
-		echo "  Applying $$f..."; \
-		psql -v ON_ERROR_STOP=1 "$(DATABASE_URL)?sslmode=disable" -f $$f; \
-	done
-	@echo "Migrations complete"
+	go run ./cmd/migrate up
 
+# Reverts ONE migration. Never run against an active publishing deployment.
 migrate-down:
-	@echo "Rolling back migrations..."
-	@for f in $(shell ls migrations/*.down.sql | sort -r); do \
-		echo "  Reverting $$f..."; \
-		psql -v ON_ERROR_STOP=1 "$(DATABASE_URL)?sslmode=disable" -f $$f; \
-	done
-	@echo "Rollback complete"
+	go run ./cmd/migrate down
+
+migrate-status:
+	go run ./cmd/migrate status
+
+# Existing manually migrated databases only, after inspecting their schema.
+migrate-baseline:
+	go run ./cmd/migrate baseline -version "$(VERSION)"
+
+keygen:
+	go run ./cmd/keygen -out "$(if $(JWT_SIGNING_KEY_FILE),$(JWT_SIGNING_KEY_FILE),.secrets/jwt-signing-key.pem)"
+
+images:
+	docker build -f infra/Dockerfile --target api -t blink-api:local .
+	docker build -f infra/Dockerfile --target worker -t blink-worker:local .
+	docker build -f infra/Dockerfile --target migrate -t blink-migrate:local .
+	docker build -f infra/Dockerfile --target keygen -t blink-keygen:local .
 
 db-setup: up migrate-up
 	@echo "Database setup complete"

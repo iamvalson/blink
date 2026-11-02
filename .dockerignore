@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+.secrets
+**/node_modules
+**/.next
+**/*.log
+bin
+dist
+tmp
+temp
+infra/tiktok-verification
