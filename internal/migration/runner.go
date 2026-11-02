@@ -125,7 +125,8 @@ func (r *Runner) guard() (*sql.Tx, error) {
 	var locked bool
 	err = tx.QueryRow(`SELECT pg_try_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':blink-migration-runner',0))`).Scan(&locked)
 	if err != nil || !locked {
-		tx.Rollback()
+		// Cleanup must not replace the original lock-acquisition error.
+		_ = tx.Rollback()
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +139,8 @@ func (r *Runner) Up() error {
 	if err != nil {
 		return err
 	}
-	defer lock.Rollback()
+	// This rollback-only transaction releases the advisory lock.
+	defer func() { _ = lock.Rollback() }()
 	status, err := r.Status()
 	if err != nil {
 		return err
@@ -162,7 +164,8 @@ func (r *Runner) Down() error {
 	if err != nil {
 		return err
 	}
-	defer lock.Rollback()
+	// This rollback-only transaction releases the advisory lock.
+	defer func() { _ = lock.Rollback() }()
 	status, err := r.Status()
 	if err != nil {
 		return err
@@ -187,7 +190,8 @@ func (r *Runner) Baseline(version uint) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Rollback()
+	// This rollback-only transaction releases the advisory lock.
+	defer func() { _ = lock.Rollback() }()
 	if !r.versions[version] {
 		return errors.New("baseline version must match an embedded migration")
 	}

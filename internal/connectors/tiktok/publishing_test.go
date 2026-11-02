@@ -46,9 +46,13 @@ func TestInitializeAndFetch(t *testing.T) {
 			if req.SourceInfo.Source != "PULL_FROM_URL" || req.PostInfo.PrivacyLevel != "SELF_ONLY" || !req.PostInfo.DisableComment {
 				t.Errorf("bad request: %+v", req)
 			}
-			io.WriteString(w, `{"data":{"publish_id":"op-1"},"error":{"code":"ok"}}`)
+			if _, err := io.WriteString(w, `{"data":{"publish_id":"op-1"},"error":{"code":"ok"}}`); err != nil {
+				t.Errorf("write initialization response: %v", err)
+			}
 		} else {
-			io.WriteString(w, `{"data":{"status":"PUBLISH_COMPLETE","publicaly_available_post_id":[9223372036854775806]},"error":{"code":"ok"}}`)
+			if _, err := io.WriteString(w, `{"data":{"status":"PUBLISH_COMPLETE","publicaly_available_post_id":[9223372036854775806]},"error":{"code":"ok"}}`); err != nil {
+				t.Errorf("write status response: %v", err)
+			}
 		}
 	}))
 	defer server.Close()
@@ -69,7 +73,12 @@ func TestInitializationErrors(t *testing.T) {
 		class      connectors.ErrorClass
 	}{{"lost_response", "bad", 200, connectors.ErrorAmbiguous}, {"server", "{}", 503, connectors.ErrorAmbiguous}, {"rate", `{"error":{"code":"rate_limit_exceeded"}}`, 429, connectors.ErrorRetryable}, {"privacy", `{"error":{"code":"privacy_level_option_mismatch","message":"secret-url"}}`, 400, connectors.ErrorPermanent}, {"missing_id", `{"data":{},"error":{"code":"ok"}}`, 200, connectors.ErrorAmbiguous}} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); io.WriteString(w, tc.body) }))
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				if _, err := io.WriteString(w, tc.body); err != nil {
+					t.Errorf("write error response: %v", err)
+				}
+			}))
 			defer s.Close()
 			c := New(TikTokConfig{MediaURLPrefix: "https://media.example/tiktok-media"}, &http.Client{Transport: rewriteTransport{s.URL}})
 			_, err := c.InitializeVideo(context.Background(), "token", connectors.VideoPublishInput{MediaURL: "https://media.example/tiktok-media/id", Options: model.TikTokOptions{PrivacyLevel: "SELF_ONLY", Consent: true, DurationSeconds: 1}})
