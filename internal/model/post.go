@@ -27,15 +27,16 @@ const (
 )
 
 type CreatePostInput struct {
-	Caption       *string     `json:"caption"`
-	Title         *string     `json:"title,omitempty"`
-	MediaURL      *string     `json:"media_url"`
-	MediaType     *string     `json:"media_type"`
-	MediaID       *uuid.UUID  `json:"media_id,omitempty"`
-	MediaIDs      []uuid.UUID `json:"media_ids,omitempty"`
-	Targets       []uuid.UUID `json:"targets"`
-	ContentFormat string      `json:"content_format,omitempty"`
-	ScheduledAt   *time.Time  `json:"scheduled_at,omitempty"`
+	TikTokOptions map[string]TikTokOptions `json:"tiktok_options,omitempty"`
+	Caption       *string                  `json:"caption"`
+	Title         *string                  `json:"title,omitempty"`
+	MediaURL      *string                  `json:"media_url"`
+	MediaType     *string                  `json:"media_type"`
+	MediaID       *uuid.UUID               `json:"media_id,omitempty"`
+	MediaIDs      []uuid.UUID              `json:"media_ids,omitempty"`
+	Targets       []uuid.UUID              `json:"targets"`
+	ContentFormat string                   `json:"content_format,omitempty"`
+	ScheduledAt   *time.Time               `json:"scheduled_at,omitempty"`
 }
 
 func (c *CreatePostInput) UnmarshalJSON(data []byte) error {
@@ -112,15 +113,13 @@ type PostWithDetails struct {
 	UpdatedAt            time.Time          `json:"updated_at"`
 }
 
-
 type IdempotencyRecord struct {
-	ID uuid.UUID 
-	RequestHash string 
-	Status string 
-	ResourceType *string 
-	ResourceID *uuid.UUID 
-	ResponseStatus *int 
-	ResponseBody []byte 
-	ExpiresAt time.Time
+	ID             uuid.UUID
+	RequestHash    string
+	Status         string
+	ResourceType   *string
+	ResourceID     *uuid.UUID
+	ResponseStatus *int
+	ResponseBody   []byte
+	ExpiresAt      time.Time
 }
-

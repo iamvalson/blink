@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal, Trash2 } from "lucide-react";
+import { MoreHorizontal, RefreshCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,11 @@ export function AccountCard({
 }: AccountCardProps) {
   const disconnectMutation = useDisconnectAccount();
 
+  function handleReconnect() {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+    window.location.href = `${apiUrl}/auth/${platform.id}`;
+  }
+
   function handleDisconnect() {
     if (confirm(`Are you sure you want to disconnect ${platform.name}?`)) {
       disconnectMutation.mutate(platform.id, {
@@ -47,7 +52,7 @@ export function AccountCard({
   }
 
   return (
-    <Card>
+    <Card className={account?.reconnect_required ? "border-amber-500/50" : undefined}>
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-lg border">
@@ -70,6 +75,10 @@ export function AccountCard({
               <span className="sr-only">Account options</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleReconnect}>
+                <RefreshCcw className="mr-2 size-4" />
+                Reconnect
+              </DropdownMenuItem>
               <DropdownMenuItem
                 variant="destructive"
                 onClick={handleDisconnect}
@@ -88,8 +97,20 @@ export function AccountCard({
           <AccountStatus account={account} isLoading={isLoading} />
         </div>
 
-        {!account && (
+        {!account ? (
           <ConnectPlatform platform={platform.id} isLoading={isLoading} />
+        ) : (
+          <Button
+            type="button"
+            variant={account.reconnect_required ? "default" : "outline"}
+            size="sm"
+            onClick={handleReconnect}
+            disabled={isLoading}
+            className={account.reconnect_required ? "bg-amber-600 hover:bg-amber-700 text-white" : ""}
+          >
+            <RefreshCcw className="mr-1.5 size-3.5" />
+            Reconnect
+          </Button>
         )}
       </CardContent>
     </Card>

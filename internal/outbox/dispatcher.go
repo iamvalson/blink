@@ -96,7 +96,7 @@ func (d *Dispatcher) dispatchEvent(
 		return failPermanently(claimed.DecodeError)
 	}
 
-	if event.EventType != "POST_CREATED" {
+	if event.EventType != "POST_CREATED" && event.EventType != "TIKTOK_STATUS_CHECK" {
 		return failPermanently(fmt.Errorf(
 			"unsupported event type: %s", event.EventType,
 		))
@@ -121,6 +121,12 @@ func (d *Dispatcher) dispatchEvent(
 		return failPermanently(err)
 	}
 
+	if event.EventType == "TIKTOK_STATUS_CHECK" {
+		if job.TargetID == nil || job.AttemptID == nil {
+			return failPermanently(errors.New("status check requires target and attempt"))
+		}
+		task = asynq.NewTask(jobs.TypeTikTokStatus, payload)
+	}
 	_, enqueueErr := d.jobsClient.Enqueue(
 		task,
 		asynq.TaskID("outbox:"+event.ID.String()),

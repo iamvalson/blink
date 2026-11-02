@@ -60,3 +60,15 @@ func (m *MockConnector) GetStatus(ctx context.Context, platformPostID string) (s
 func (m *MockConnector) ReconcilePublish(ctx context.Context, token string, platformUserID string, attemptID string, caption string) (connectors.ReconciliationResult, error) {
 	return connectors.ReconciliationResult{Outcome: connectors.ReconciliationNotFoundConfirmed}, nil
 }
+
+// RefreshToken simulates refreshing an OAuth token.
+func (m *MockConnector) RefreshToken(ctx context.Context, refreshToken string) (connectors.TokenResult, error) {
+	exp := time.Now().Add(24 * time.Hour)
+	newAccess := fmt.Sprintf("mock_refreshed_token_%s", uuid.New().String()[:8])
+	newRefresh := fmt.Sprintf("mock_refreshed_rt_%s", uuid.New().String()[:8])
+	return connectors.TokenResult{
+		AccessToken:  newAccess,
+		ExpiresAt:    &exp,
+		RefreshToken: &newRefresh,
+	}, nil
+}

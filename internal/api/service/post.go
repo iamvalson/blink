@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,6 +58,11 @@ func (s *PostService) CreatePost(
 		return nil, fmt.Errorf("%w: caption is required", ErrPostValidation)
 	}
 
+	for _, options := range input.TikTokOptions {
+		if err := options.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrPostValidation, err)
+		}
+	}
 	// Call repository to create post. Storage-layer validation errors (platform
 	// rules, media checks, etc.) are wrapped so the handler can route them to
 	// HTTP 400 without inspecting error message strings.
@@ -75,6 +81,9 @@ func (s *PostService) CreatePost(
 // business-rule or data-validation checks in the storage layer and should
 // therefore be surfaced to the caller as a 400 Bad Request.
 func isStorageValidationError(err error) bool {
+	if strings.Contains(err.Error(), "TikTok") {
+		return true
+	}
 	// Explicit sentinel errors defined in storage
 	if errors.Is(err, storage.ErrInvalidScheduledTime) {
 		return true

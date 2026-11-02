@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 type mockConnector struct {
 	platformID     string
 	authCodeURL    string
+	authCodeErr    error
 	authenticateFn func(ctx context.Context, params connectors.AuthParams) (connectors.AuthResult, error)
 	lastAuthParams connectors.AuthParams
 }
@@ -33,11 +35,14 @@ var _ connectors.OAuthConnector = (*mockConnector)(nil)
 
 func (m *mockConnector) PlatformID() string { return m.platformID }
 
-func (m *mockConnector) AuthCodeURL(state, verifier string) string {
-	if m.authCodeURL != "" {
-		return m.authCodeURL
+func (m *mockConnector) AuthCodeURL(state, verifier string) (string, error) {
+	if m.authCodeErr != nil {
+		return "", m.authCodeErr
 	}
-	return "https://provider.example.com/authorize?state=" + state
+	if m.authCodeURL != "" {
+		return m.authCodeURL, nil
+	}
+	return "https://provider.example.com/authorize?state=" + state, nil
 }
 
 func (m *mockConnector) Authenticate(ctx context.Context, params connectors.AuthParams) (connectors.AuthResult, error) {
@@ -114,6 +119,22 @@ func TestOAuthStart_AuthenticatedUserGetsRedirect(t *testing.T) {
 	loc := rec.Header().Get("Location")
 	if loc == "" {
 		t.Fatal("expected Location header in response")
+	}
+}
+
+func TestOAuthStart_AuthCodeURLErrorReturns500(t *testing.T) {
+	mc := &mockConnector{
+		platformID:  "twitter",
+		authCodeErr: errors.New("failed to generate auth url"),
+	}
+	h := NewAuthHandler(mc, nil, "", "http://localhost:3000", true)
+	req := authenticatedRequest(http.MethodGet, "/auth/twitter", "user-abc")
+	rec := httptest.NewRecorder()
+
+	h.OAuthStart(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
 	}
 }
 

@@ -1,12 +1,12 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { siX, siYoutube } from "simple-icons";
+import { siX, siYoutube, siTiktok } from "simple-icons";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export type Platform = "twitter" | "youtube";
+export type Platform = "twitter" | "youtube" | "tiktok";
 
 type PlatformSelectorProps = {
   selectedPlatforms: Platform[];
@@ -32,12 +32,18 @@ const platforms: {
     description: "Upload to YouTube",
     icon: siYoutube,
   },
+  {
+    id: "tiktok",
+    name: "TikTok",
+    description: "Upload to TikTok",
+    icon: siTiktok,
+  },
 ];
 
 export function PlatformSelector({
   selectedPlatforms,
   onToggle,
-  connectedPlatforms = ["twitter", "youtube"],
+  connectedPlatforms = ["twitter", "youtube", "tiktok"],
 }: PlatformSelectorProps) {
   return (
     <div className="grid gap-3 sm:grid-cols-2">

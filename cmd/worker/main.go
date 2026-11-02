@@ -4,14 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
@@ -30,6 +33,7 @@ func main() {
 
 	if err := run(ctx); err != nil {
 		log.Error().Err(err).Msg("Worker stopped with error")
+		os.Exit(1)
 	}
 }
 
@@ -52,7 +56,14 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("DATABASE_URL environment variable not set")
 	}
 
-	db, err := pgxpool.New(context.Background(), dbURL)
+	poolConfig, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		return fmt.Errorf("parse database url: %w", err)
+	}
+	if poolConfig.MaxConns < 25 {
+		poolConfig.MaxConns = 25
+	}
+	db, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -100,6 +111,13 @@ func run(ctx context.Context) error {
 	// Create repositories
 	postsRepo := storage.NewPostRepository(db)
 	publicationsRepo := storage.NewPublicationRepository(db)
+	socialAccountRepo := storage.NewSocialAccountRepository(db)
+
+	tokenManager := service.NewTokenManagerService(
+		socialAccountRepo,
+		db,
+		encryptionKey,
+	)
 
 	// Create platform connectors
 	var twitterConnector connectors.PlatformConnector
@@ -125,11 +143,13 @@ func run(ctx context.Context) error {
 	}
 	youtubeConnector := youtube.New(youtubeCfg)
 
+	tiktokConnector := tiktok.New(tiktok.TikTokConfig{ClientKey: os.Getenv("TIKTOK_CLIENT_KEY"), ClientSecret: os.Getenv("TIKTOK_CLIENT_SECRET"), RedirectURI: os.Getenv("TIKTOK_REDIRECT_URI"), Scopes: strings.Split(os.Getenv("TIKTOK_SCOPES"), ","), MediaURLPrefix: cfg.TikTokMediaURLPrefix})
 	// To add a new publish platform, add it to this map.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	platformConnectors := map[string]connectors.PlatformConnector{
 		connectors.PlatformTwitter: twitterConnector,
 		connectors.PlatformYoutube: youtubeConnector,
+		connectors.PlatformTikTok:  tiktokConnector,
 	}
 
 	// Create worker server
@@ -147,9 +167,20 @@ func run(ctx context.Context) error {
 	// Create and register handler
 	mux := asynq.NewServeMux()
 	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey, retryClient).
-		WithMediaStore(mediaRepo, mediaStore)
+		WithMediaStore(mediaRepo, mediaStore).WithTokenManager(tokenManager)
 
+	if cfg.TikTokMediaURLPrefix != "" {
+		if _, err := exec.LookPath("ffprobe"); err != nil {
+			log.Warn().Str("platform", "tiktok").Msg("ffprobe is missing: install FFmpeg before publishing TikTok videos")
+		}
+		signer, err := mediastore.NewDeliverySigner(cfg.TikTokMediaURLPrefix, cfg.TikTokMediaSigningKey, cfg.TikTokMediaTTL)
+		if err != nil {
+			return err
+		}
+		processor.WithAsyncPublishing(signer, cfg.TikTokPollInterval, cfg.TikTokPollDeadline)
+	}
 	mux.HandleFunc(jobs.TypePublishPost, processor.ProcessPublishJob)
+	mux.HandleFunc(jobs.TypeTikTokStatus, processor.ProcessTikTokStatusJob)
 
 	log.Info().Msg("Job handlers registered")
 

@@ -902,4 +902,3 @@ func TestTwitterMediaUploadFailurePreventsPublication(t *testing.T) {
 		t.Fatalf("expected attempt status FAILED, got %s", store.attempt.Status)
 	}
 }
-

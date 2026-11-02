@@ -139,7 +139,7 @@ cp .env.example .env
 | `REDIS_URL`                       | `redis://localhost:6379`                           | API / Worker   | Redis connection URL for Asynq queue                              |
 | `SHUTDOWN_TIMEOUT`                | `30s`                                              | API / Worker   | Graceful shutdown timeout (e.g. `10s`, `30s`, `1m`)                |
 | `ENCRYPTION_KEY`                  | *required*                                         | API / Worker   | 32-byte key or 64-char hex string for AES-GCM token encryption   |
-| `JWT_SECRET`                      | *optional*                                         | API            | Secret key for signing user authentication tokens                 |
+| `JWT_SIGNING_KEY_FILE` | `./.secrets/jwt-signing-key.pem` | API | Persisted Ed25519 PKCS#8 private key; provision before production startup |
 | `FRONTEND_URL`                    | `http://localhost:3000`                            | API            | Frontend URL for OAuth redirects                                  |
 | `CORS_ORIGINS`                    | `http://localhost:3000`                            | API            | Comma-separated list of allowed CORS origins                      |
 | `PLATFORM_MODE`                   | `real`                                             | Worker         | Connector execution mode: `real` or `mock`                        |
@@ -181,8 +181,8 @@ make db-setup
 You can also run or revert migrations manually at any time:
 
 ```bash
-make migrate-up    # Apply all pending migrations in migrations/*.up.sql
-make migrate-down  # Roll back all migrations in reverse order
+make migrate-up    # Apply only pending tracked migrations
+make migrate-down  # Roll back ONE applied migration
 ```
 
 ### 2. Run API and Worker
@@ -370,8 +370,8 @@ make logs           # Follow container logs
 make ps             # Check container health and status
 make db-setup       # Start containers and apply all schema migrations
 make db-reset       # Teardown volumes, restart containers, and reapply migrations
-make migrate-up     # Apply all pending migrations in order
-make migrate-down   # Rollback all migrations in reverse order
+make migrate-up     # Apply only pending tracked migrations
+make migrate-down   # Roll back ONE applied migration
 make run-api        # Run Go API process locally
 make run-worker     # Run Go Worker process locally
 ```
@@ -396,3 +396,7 @@ make run-worker     # Run Go Worker process locally
 ## License
 
 Blink is under active development. See [`LICENSE`](LICENSE) for licensing details.
+
+### Deployment readiness
+
+See [deployment readiness](docs/deployment-readiness.md) for runtime images with ffprobe, persisted authentication keys, tracked migrations and one-time adoption of manually initialized databases. Existing deployments must establish migration history before running the new `make migrate-up`. Never run a rollback against active publishing jobs.

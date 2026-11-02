@@ -6,6 +6,7 @@ export interface SocialAccount {
   platform: Platform;
   platform_user_id: string;
   expires_at?: string;
+  reconnect_required?: boolean;
   created_at: string;
   updated_at: string;
 }

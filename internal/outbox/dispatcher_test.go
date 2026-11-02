@@ -114,3 +114,27 @@ func TestDispatchSurfacesCompletionFailure(t *testing.T) {
 		t.Fatalf("lost completion error: %v", err)
 	}
 }
+
+func TestDispatchTikTokStatusCheck(t *testing.T) {
+	event := testEvent()
+	event.Event.EventType = "TIKTOK_STATUS_CHECK"
+	event.Event.Payload["attempt_id"] = uuid.NewString()
+	store := &fakeEvents{events: []storage.ClaimedOutboxEvent{event}}
+	q := &fakeQueue{}
+	if err := NewDispatcher(store, q).ProcessPendingEvents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if q.task == nil || q.task.Type() != jobs.TypeTikTokStatus {
+		t.Fatal("status event did not route to TikTok polling")
+	}
+	job, err := jobs.ParsePublishJob(q.task.Payload())
+	if err != nil || job.AttemptID == nil || job.TargetID == nil {
+		t.Fatal("lost recovery identifiers")
+	}
+	delete(event.Event.Payload, "attempt_id")
+	store.events = []storage.ClaimedOutboxEvent{event}
+	q.calls = 0
+	if err := NewDispatcher(store, q).ProcessPendingEvents(context.Background()); err == nil || q.calls != 0 {
+		t.Fatal("invalid status event was dispatched")
+	}
+}

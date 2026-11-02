@@ -9,6 +9,7 @@ import (
 )
 
 type PublishJob struct {
+	AttemptID            *uuid.UUID `json:"attempt_id,omitempty"`
 	PostID               uuid.UUID  `json:"post_id"`
 	TargetID             *uuid.UUID `json:"target_id,omitempty"`
 	SchedulingGeneration int        `json:"scheduling_generation,omitempty"`

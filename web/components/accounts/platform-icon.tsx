@@ -1,6 +1,6 @@
 "use client";
 
-import { siX, siYoutube } from "simple-icons";
+import { siX, siYoutube, siTiktok } from "simple-icons";
 
 import type { Platform } from "@/types/platform";
 
@@ -41,6 +41,20 @@ export function PlatformIcon({
           aria-label="YouTube"
         >
           <path d={siYoutube.path} />
+        </svg>
+      );
+
+    case "tiktok":
+      return (
+        <svg
+          role="img"
+          viewBox="0 0 24 24"
+          width={size}
+          height={size}
+          className={className}
+          aria-label="TikTok"
+        >
+          <path d={siTiktok.path} />
         </svg>
       );
 

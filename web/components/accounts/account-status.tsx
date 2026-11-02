@@ -29,6 +29,15 @@ export function AccountStatus({
     );
   }
 
+  if (account.reconnect_required) {
+    return (
+      <div className="flex items-center gap-2 text-sm font-medium text-amber-600 dark:text-amber-400">
+        <CircleAlert className="size-4" />
+        Reconnect required
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-2 text-sm text-emerald-600">
       <CheckCircle2 className="size-4" />

@@ -3,19 +3,22 @@ package tests
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/iamvalson/blink/internal/migration"
+	"github.com/iamvalson/blink/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Each test gets a private schema. Never load the application's .env or change
 // its tables. A configured but unavailable test database is an error, not a skip.
-func testDatabase(t *testing.T) *pgxpool.Pool {
+func testDatabase(t *testing.T) *pgxpool.Pool { return testDatabaseSetup(t, true) }
+
+func testDatabaseSetup(t *testing.T, apply bool) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("BLINK_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -55,17 +58,17 @@ func testDatabase(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	files, err := filepath.Glob("../migrations/*.up.sql")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("find migrations: %v", err)
-	}
-	for _, file := range files {
-		data, err := os.ReadFile(file)
+	if apply {
+		runner, err := migration.OpenConfig(cfg.ConnConfig, migrations.Files)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec(ctx, string(data)); err != nil {
-			t.Fatalf("apply %s: %v", file, err)
+		if err := runner.Up(); err != nil {
+			runner.Close()
+			t.Fatalf("apply tracked migrations: %v", err)
+		}
+		if err := runner.Close(); err != nil {
+			t.Fatal(err)
 		}
 	}
 	return db

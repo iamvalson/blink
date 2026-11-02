@@ -23,6 +23,14 @@ export function AccountsList() {
       }
     });
 
+    const reconnectTarget = searchParams.get("reconnect");
+    if (reconnectTarget) {
+      const p = PLATFORMS.find((pl) => pl.id === reconnectTarget);
+      toast.warning(
+        `Please reconnect your ${p ? p.name : reconnectTarget} account to continue publishing.`,
+      );
+    }
+
     if (shouldCleanUrl) {
       refetch();
       router.replace(pathname, { scroll: false });

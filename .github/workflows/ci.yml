@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev, develop]
 
 jobs:
   test:
@@ -59,9 +59,9 @@ jobs:
         env:
           DATABASE_URL: postgres://blink:devpass@localhost:5432/blink_db
         run: |
-          for migration in migrations/*.up.sql; do
-            psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$migration"
-          done
+          go run ./cmd/migrate up
+          go run ./cmd/migrate up
+          go run ./cmd/migrate status
 
       - name: Format check
         run: go fmt ./...
@@ -71,6 +71,9 @@ jobs:
 
       - name: Lint
         run: golangci-lint run ./...
+
+      - name: Install video validation tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Run tests
         env:
@@ -82,3 +85,8 @@ jobs:
         run: |
           go build -o bin/api cmd/api/main.go
           go build -o bin/worker cmd/worker/main.go
+
+      - name: Build worker runtime and verify ffprobe
+        run: |
+          docker build -f infra/Dockerfile --target worker -t blink-worker:ci .
+          docker run --rm --entrypoint ffprobe blink-worker:ci -version

@@ -14,7 +14,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const userInfoURL = "https://api.x.com/2/users/me"
+var userInfoURL = "https://api.x.com/2/users/me"
 
 // NewOAuthConfig creates an OAuth2 config for Twitter
 func NewOAuthConfig(cfg TwitterConfig) *oauth2.Config {
@@ -98,8 +98,11 @@ func (c *Connector) RefreshToken(ctx context.Context, refreshToken string) (conn
 }
 
 // GetUserInfo fetches authenticated user's info
-func GetUserInfo(ctx context.Context, token *oauth2.Token) (*TwitterUserInfo, error) {
-	client := &http.Client{}
+func GetUserInfo(ctx context.Context, token *oauth2.Token, client ...*http.Client) (*TwitterUserInfo, error) {
+	hc := http.DefaultClient
+	if len(client) > 0 && client[0] != nil {
+		hc = client[0]
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoURL, nil)
 	if err != nil {
 		return nil, err
@@ -107,7 +110,7 @@ func GetUserInfo(ctx context.Context, token *oauth2.Token) (*TwitterUserInfo, er
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 
-	resp, err := client.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +126,10 @@ func GetUserInfo(ctx context.Context, token *oauth2.Token) (*TwitterUserInfo, er
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode user info: %w", err)
+	}
+
+	if strings.TrimSpace(result.Data.ID) == "" {
+		return nil, fmt.Errorf("twitter user info missing user id")
 	}
 
 	return &result.Data, nil

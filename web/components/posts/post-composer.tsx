@@ -1,5 +1,9 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
+import { getTikTokCreatorInfo } from "@/features/posts/api/tiktok-creator-info";
+import { emptyTikTokOptions, effectiveTikTokOptions, validateTikTokPost, type TikTokOptions } from "@/features/posts/utils/tiktok-validator";
+import { TikTokSettings } from "./tiktok-settings";
 import { useAccounts } from "@/features/accounts/hooks/use-accounts";
 import { createPost, retryPost } from "@/features/posts/api/create-post";
 import { usePost } from "@/features/posts/hooks/use-posts";
@@ -7,7 +11,7 @@ import { deleteMedia, uploadMedia } from "@/features/posts/api/upload-media";
 import type { ContentFormat, PostResponse } from "@/types/post";
 import { CalendarClock, RefreshCcw, Send } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +43,7 @@ type SubmitPhase =
   | "scheduled" // backend accepted scheduled post
   | "queued" // backend accepted, job enqueued
   | "published" // terminal success
+  | "partial"
   | "failed"; // terminal failure
 
 export function PostComposer() {
@@ -52,7 +57,7 @@ export function PostComposer() {
             .map((account) => account.platform)
             .filter(
               (platform): platform is Platform =>
-                platform === "twitter" || platform === "youtube",
+                platform === "twitter" || platform === "youtube" || platform === "tiktok",
             ),
         ),
       ),
@@ -60,6 +65,8 @@ export function PostComposer() {
   );
 
   const [caption, setCaption] = useState("");
+  const [tikTokAccount, setTikTokAccount] = useState("");
+  const [tikTokChoices, setTikTokChoices] = useState<Record<string,TikTokOptions>>({});
   const [selectedPlatforms, setSelectedPlatforms] = useState<Platform[]>([]);
   const [media, setMedia] = useState<MediaFile[]>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -67,18 +74,12 @@ export function PostComposer() {
 
   // Video duration and aspect ratio validation state
   const [videoMetadata, setVideoMetadata] = useState<VideoMetadata | null>(null);
-  const [videoValidation, setVideoValidation] = useState<VideoValidationResult | null>(null);
+  const [videoValidationState, setVideoValidation] = useState<VideoValidationResult | null>(null);
   const [isValidatingVideo, setIsValidatingVideo] = useState(false);
   const [validatingFileName, setValidatingFileName] = useState<string | undefined>(undefined);
   const activeValidationAbortRef = useRef<AbortController | null>(null);
 
-  // Revalidate whenever youtubeFormat or videoMetadata changes
-  useEffect(() => {
-    if (videoMetadata) {
-      const result = validateVideoForFormat(videoMetadata, youtubeFormat);
-      setVideoValidation(result);
-    }
-  }, [youtubeFormat, videoMetadata]);
+  const videoValidation = useMemo(() => videoMetadata ? validateVideoForFormat(videoMetadata,youtubeFormat) : videoValidationState,[videoMetadata,youtubeFormat,videoValidationState]);
 
   // Submission state
   const [phase, setPhase] = useState<SubmitPhase>("idle");
@@ -89,7 +90,7 @@ export function PostComposer() {
   // Poll the post status after submission
   const isTracking =
     submittedPost !== null &&
-    (phase === "queued" || phase === "published" || phase === "failed");
+    (phase === "queued" || phase === "published" || phase === "failed" || phase === "partial");
   const { data: polledPost } = usePost(
     isTracking ? submittedPost.id : null,
     isTracking,
@@ -108,6 +109,9 @@ export function PostComposer() {
     ) {
       setPhase("published");
       toast.success("Post published successfully!");
+    } else if (displayPost.status === "PARTIALLY_PUBLISHED" && phase !== "partial") {
+      setPhase("partial");
+      toast.warning("Some platforms published. Review failed targets before retrying.");
     } else if (
       displayPost.status === "FAILED" &&
       phase !== "failed"
@@ -125,6 +129,13 @@ export function PostComposer() {
         : [];
   }, [selectedPlatforms, connectedPlatforms]);
 
+  const isTikTokSelected = resolvedSelectedPlatforms.includes("tiktok");
+  const tikTokAccounts = connectedAccounts.filter(a => a.platform === "tiktok");
+  const tikTokAccountID = tikTokAccounts.some(a => a.id === tikTokAccount) ? tikTokAccount : (tikTokAccounts[0]?.id ?? "");
+  const creatorQuery = useQuery({queryKey:["tiktok-creator",tikTokAccountID],queryFn:()=>getTikTokCreatorInfo(tikTokAccountID),enabled:isTikTokSelected && Boolean(tikTokAccountID),staleTime:0,refetchOnMount:"always",retry:false});
+  const tikTokOptions = effectiveTikTokOptions({...emptyTikTokOptions,...tikTokChoices[tikTokAccountID],duration_seconds:videoMetadata?.duration ?? 0},creatorQuery.data);
+  const tikTokError = isTikTokSelected ? (creatorQuery.isFetching ? "Loading current TikTok creator settings…" : creatorQuery.isError ? "TikTok creator settings could not be loaded. Refresh to try again." : validateTikTokPost(tikTokOptions,creatorQuery.data,media.map(m=>({contentType:m.file.type,complete:m.uploadStatus==="complete" && Boolean(m.mediaId),size:m.file.size})),videoMetadata,caption)) : null;
+  const tikTokPayload = isTikTokSelected ? { [tikTokAccountID]: tikTokOptions } : undefined;
   const isYouTubeSelected = resolvedSelectedPlatforms.includes("youtube");
   const isXSelected = resolvedSelectedPlatforms.includes("twitter");
 
@@ -151,7 +162,7 @@ export function PostComposer() {
     if (resolvedSelectedPlatforms.includes("twitter")) {
       return 280;
     }
-    return 5000;
+    return resolvedSelectedPlatforms.includes("tiktok") ? 2200 : 5000;
   }, [resolvedSelectedPlatforms]);
 
   const charactersRemaining = characterLimit - caption.length;
@@ -346,6 +357,7 @@ export function PostComposer() {
 
   const handlePublish = async () => {
     if (isLoadingAccounts) return;
+    if (tikTokError) { toast.error(tikTokError); return; }
     if (phase === "submitting") return; // prevent double submit
 
     if (connectedAccounts.length === 0) {
@@ -405,7 +417,7 @@ export function PostComposer() {
     const targets = resolvedSelectedPlatforms
       .map(
         (platform) =>
-          connectedAccounts.find((account) => account.platform === platform)
+          (platform === "tiktok" ? connectedAccounts.find(account => account.id === tikTokAccountID) : connectedAccounts.find((account) => account.platform === platform))
             ?.id,
       )
       .filter((target): target is string => Boolean(target));
@@ -437,6 +449,7 @@ export function PostComposer() {
         media_id: primaryMediaId,
         media_ids: mediaIds.length > 0 ? mediaIds : null,
         content_format: contentFormat,
+        tiktok_options: tikTokPayload,
       });
 
       setSubmittedPost(post);
@@ -471,6 +484,7 @@ export function PostComposer() {
   const handleScheduleSubmit = async (isoDate: string) => {
     // Run same validations as handlePublish
     if (isLoadingAccounts) return;
+    if (tikTokError) { toast.error(tikTokError); return; }
     if (connectedAccounts.length === 0) {
       toast.error("Connect a social account before scheduling.");
       return;
@@ -522,7 +536,7 @@ export function PostComposer() {
     const targets = resolvedSelectedPlatforms
       .map(
         (platform) =>
-          connectedAccounts.find((account) => account.platform === platform)?.id,
+          (platform === "tiktok" ? connectedAccounts.find(account => account.id === tikTokAccountID) : connectedAccounts.find((account) => account.platform === platform))?.id,
       )
       .filter((target): target is string => Boolean(target));
 
@@ -552,6 +566,7 @@ export function PostComposer() {
         media_id: primaryMediaId,
         media_ids: mediaIds.length > 0 ? mediaIds : null,
         content_format: contentFormat,
+        tiktok_options: tikTokPayload,
         scheduled_at: isoDate,
       });
 
@@ -570,7 +585,7 @@ export function PostComposer() {
 
   const handleReset = () => {
     // Only reset after a terminal state
-    if (phase !== "published" && phase !== "failed" && phase !== "scheduled") return;
+    if (phase !== "published" && phase !== "failed" && phase !== "partial" && phase !== "scheduled") return;
     activeValidationAbortRef.current?.abort();
     setVideoMetadata(null);
     setVideoValidation(null);
@@ -581,6 +596,7 @@ export function PostComposer() {
     setSelectedPlatforms([]);
     setMedia([]);
     setYoutubeFormat("VIDEO");
+    setTikTokChoices({});
     setPhase("idle");
     setSubmittedPost(null);
   };
@@ -596,6 +612,7 @@ export function PostComposer() {
     queued: "Queued",
     published: "Published",
     failed: "Retry Publish",
+    partial: "Retry failed targets",
   }[phase];
 
   return (
@@ -635,6 +652,14 @@ export function PostComposer() {
               )}
             </div>
 
+            {isTikTokSelected && <>
+              <label className="block text-sm font-medium">TikTok account
+                <select value={tikTokAccountID} onChange={e=>setTikTokAccount(e.target.value)} disabled={isDisabled} className="mt-1 block w-full rounded border bg-background p-2">
+                  {tikTokAccounts.map(a=><option key={a.id} value={a.id}>{a.platform_user_id}</option>)}
+                </select>
+              </label>
+              <TikTokSettings key={tikTokAccountID} creator={creatorQuery.data} options={tikTokOptions} onChange={options=>setTikTokChoices(previous=>({...previous,[tikTokAccountID]:options}))} disabled={isDisabled} loading={creatorQuery.isFetching} error={tikTokError} onRefresh={()=>{void creatorQuery.refetch();}} />
+            </>}
             {/* YouTube format selector — only when YouTube is selected */}
             {isYouTubeSelected && (
               <>
@@ -733,7 +758,7 @@ export function PostComposer() {
             {displayPost && phase !== "idle" && phase !== "scheduled" && (
               <PublishingProgress
                 post={displayPost}
-                onRetry={phase === "failed" ? handleRetry : undefined}
+                onRetry={(phase === "failed" || phase === "partial") ? handleRetry : undefined}
                 isRetrying={isRetrying}
               />
             )}
@@ -741,7 +766,7 @@ export function PostComposer() {
 
           <CardFooter className="flex flex-col gap-3 border-t bg-muted/30 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex gap-2">
-              {(phase === "published" || phase === "failed" || phase === "scheduled") && (
+              {(phase === "published" || phase === "failed" || phase === "partial" || phase === "scheduled") && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -760,7 +785,7 @@ export function PostComposer() {
                 variant="outline"
                 onClick={() => setScheduleOpen(true)}
                 className="flex-1 sm:flex-none"
-                disabled={isDisabled}
+                disabled={isDisabled || Boolean(tikTokError)}
               >
                 <CalendarClock className="mr-2 h-4 w-4" />
                 Schedule
@@ -768,10 +793,11 @@ export function PostComposer() {
 
               <Button
                 type="button"
-                onClick={phase === "failed" ? handleRetry : handlePublish}
+                onClick={(phase === "failed" || phase === "partial") ? handleRetry : handlePublish}
                 disabled={
                   isDisabled ||
                   isRetrying ||
+                  (phase !== "failed" && phase !== "partial" && Boolean(tikTokError)) ||
                   hasUploadingMedia ||
                   !caption.trim() ||
                   charactersRemaining < 0 ||

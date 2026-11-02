@@ -68,4 +68,3 @@ func TestPostHandlerPostStatusSSEInvalidPostID(t *testing.T) {
 		t.Fatalf("expected status 400 for invalid post id, got %d", rec.Code)
 	}
 }
-

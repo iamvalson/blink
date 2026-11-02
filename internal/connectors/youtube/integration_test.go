@@ -23,9 +23,9 @@ func TestIntegration_YouTubeLifecycle(t *testing.T) {
 	defer videoFile.Close()
 
 	cfg := YouTubeConfig{
-		ClientID:    "test",
-		ClientSecret: "test", 
-		CallbackURL: "test",
+		ClientID:     "test",
+		ClientSecret: "test",
+		CallbackURL:  "test",
 	}
 
 	conn := New(cfg)
@@ -60,7 +60,7 @@ func TestIntegration_YouTubeLifecycle(t *testing.T) {
 			t.Fatalf("GetStatus failed: %v", err)
 		}
 		t.Logf("Status attempt %d: %s", i+1, status)
-		
+
 		if status == "published" || status == "failed" {
 			break
 		}

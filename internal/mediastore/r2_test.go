@@ -301,4 +301,3 @@ func TestLocalStore_Operations(t *testing.T) {
 		t.Fatalf("expected ErrNotFound after delete, got %v", err)
 	}
 }
-

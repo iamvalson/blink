@@ -55,3 +55,8 @@ docker-compose.override.yml
 
 # air (live reload tool, if using it)
 tmp/
+# Persisted private authentication signing keys
+.secrets/
+
+# Local TikTok ownership files and Windows download metadata
+infra/tiktok-verification/

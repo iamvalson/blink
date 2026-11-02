@@ -115,6 +115,9 @@ func GetChannelInfo(
 	token *oauth2.Token,
 ) (*YouTubeChannelInfo, error) {
 	client := oauth2.NewClient(ctx, oauth2.StaticTokenSource(token))
+	if hc, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && hc != nil && hc.Timeout > 0 {
+		client.Timeout = hc.Timeout
+	}
 
 	req, err := http.NewRequestWithContext(
 		ctx,
@@ -154,7 +157,7 @@ func GetChannelInfo(
 		)
 	}
 
-	if len(result.Items) == 0 {
+	if len(result.Items) == 0 || strings.TrimSpace(result.Items[0].ID) == "" {
 		return nil, fmt.Errorf("no YouTube channel found")
 	}
 
