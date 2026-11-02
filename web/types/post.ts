@@ -1,6 +1,8 @@
+import type { TikTokOptions } from "@/features/posts/utils/tiktok-validator";
 export type ContentFormat = "VIDEO" | "SHORT";
 
 export interface CreatePostRequest {
+  tiktok_options?: Record<string, TikTokOptions>;
   caption: string;
   targets: string[];
   media_url?: string | null;

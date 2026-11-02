@@ -1,7 +1,7 @@
 "use client";
 
 import { CalendarClock, Clock } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -21,6 +21,8 @@ type ScheduleDialogProps = {
   /** Called with an ISO-8601 UTC string when the user confirms */
   onSchedule: (isoDate: string) => void;
   isSubmitting?: boolean;
+  initialScheduledAt?: string | null;
+  mode?: "schedule" | "reschedule";
 };
 
 export function ScheduleDialog({
@@ -28,20 +30,33 @@ export function ScheduleDialog({
   onOpenChange,
   onSchedule,
   isSubmitting = false,
+  initialScheduledAt,
+  mode = "schedule",
 }: ScheduleDialogProps) {
-  const [date, setDate] = useState("");
+  const [date, setDate] = useState(() => {
+    if (!initialScheduledAt) return "";
+    const value = new Date(initialScheduledAt);
+    if (!Number.isFinite(value.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+  });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Minimum selectable datetime is "now + 5 min" to give backend wiggle-room
   const minDateTime = useMemo(() => {
-    const d = new Date(Date.now() + 5 * 60 * 1000);
+    const d = new Date(now + 5 * 60 * 1000);
     // Format as YYYY-MM-DDTHH:mm (local time, required by datetime-local input)
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }, []);
+  }, [now]);
 
   const selectedDate = date ? new Date(date) : null;
   const isValid =
-    selectedDate !== null && selectedDate > new Date(Date.now() + 60 * 1000);
+    selectedDate !== null && selectedDate > new Date(now + 60 * 1000);
 
   const handleSchedule = () => {
     if (!isValid || !selectedDate) return;
@@ -49,18 +64,18 @@ export function ScheduleDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(value) => { if (!isSubmitting) onOpenChange(value); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
             <CalendarClock className="h-5 w-5 text-primary" />
           </div>
 
-          <DialogTitle>Schedule post</DialogTitle>
+          <DialogTitle>{mode === "reschedule" ? "Reschedule post" : "Schedule post"}</DialogTitle>
 
           <DialogDescription>
-            Choose when Blink should publish this post to your selected
-            platforms. Times are in your local timezone.
+            {mode === "reschedule" ? "Choose a new time for this post. This updates all selected platforms." : "Choose when Blink should publish this post to your selected platforms."}
+            Times are in your local timezone.
           </DialogDescription>
         </DialogHeader>
 
@@ -75,6 +90,7 @@ export function ScheduleDialog({
               onChange={(e) => setDate(e.target.value)}
               min={minDateTime}
               className="w-full"
+              disabled={isSubmitting}
             />
           </div>
 
@@ -115,7 +131,7 @@ export function ScheduleDialog({
             disabled={!isValid || isSubmitting}
             onClick={handleSchedule}
           >
-            {isSubmitting ? "Scheduling…" : "Schedule post"}
+            {isSubmitting ? "Saving…" : mode === "reschedule" ? "Save new time" : "Schedule post"}
           </Button>
         </DialogFooter>
       </DialogContent>

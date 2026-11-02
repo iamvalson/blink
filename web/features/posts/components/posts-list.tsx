@@ -6,6 +6,7 @@ import { usePostStatusStream } from "@/features/posts/hooks/use-post-status-stre
 import type { ListPostsFilter, PostResponse } from "@/types/post";
 import {
   AlertCircle,
+  CalendarClock,
   ExternalLink,
   FileText,
   Loader2,
@@ -23,6 +24,7 @@ import { siTiktok, siX, siYoutube } from "simple-icons";
 import { formatDistanceToNow } from "date-fns";
 
 import { Button, buttonVariants } from "@/components/ui/button";
+import { ReschedulePostDialog } from "@/components/posts/reschedule-post-dialog";
 import { FormatBadge, StatusBadge } from "@/components/posts/status-badge";
 import {
   DropdownMenu,
@@ -75,6 +77,7 @@ function PlatformIcon({
 
 const STATUS_FILTERS = [
   { value: "", label: "All" },
+  { value: "SCHEDULED", label: "Scheduled" },
   { value: "QUEUED", label: "Queued" },
   { value: "PUBLISHING", label: "Publishing" },
   { value: "PUBLISHED", label: "Published" },
@@ -101,6 +104,7 @@ function PostCard({
 }) {
   const router = useRouter();
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRescheduling, setIsRescheduling] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
 
   // Open an SSE stream for every non-terminal post.
@@ -129,6 +133,7 @@ function PostCard({
   const canDelete =
     post.status !== "QUEUED" && post.status !== "PUBLISHING" && post.status !== "PROCESSING";
   const canRetry = post.status === "FAILED";
+  const canReschedule = post.status === "SCHEDULED" || post.status === "QUEUED";
 
   const handleDelete = async () => {
     if (!confirm("Delete this post? This action cannot be undone.")) return;
@@ -236,6 +241,11 @@ function PostCard({
           </p>
         ) : null}
 
+        {post.status === "SCHEDULED" && post.scheduled_at && (
+          <p className="text-xs text-muted-foreground">
+            Scheduled for {new Date(post.scheduled_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">
           {formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}
         </p>
@@ -267,6 +277,12 @@ function PostCard({
               View details
             </DropdownMenuItem>
 
+            {canReschedule && (
+              <DropdownMenuItem onClick={() => setIsRescheduling(true)} className="gap-2">
+                <CalendarClock className="h-3.5 w-3.5" />
+                Reschedule
+              </DropdownMenuItem>
+            )}
             {isReconnectRequired && (
               <DropdownMenuItem
                 onClick={handleReconnect}
@@ -322,6 +338,9 @@ function PostCard({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {isRescheduling && (
+        <ReschedulePostDialog post={post} onClose={() => setIsRescheduling(false)} />
+      )}
     </div>
   );
 }

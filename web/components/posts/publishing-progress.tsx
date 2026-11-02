@@ -102,7 +102,7 @@ function StatusBadge({ status }: { status: string }) {
       icon: AlertCircle,
     },
     UNKNOWN: {
-      label: "Unknown",
+      label: "Needs review",
       className: "bg-neutral-50 text-neutral-600 border-neutral-200",
       icon: RefreshCcw,
     },
@@ -153,7 +153,7 @@ export function PublishingProgress({
     post.status === "QUEUED" ||
     post.status === "PUBLISHING" ||
     post.status === "PROCESSING";
-  const isFailed = post.status === "FAILED";
+  const isFailed = post.status === "FAILED" || post.status === "PARTIALLY_PUBLISHED";
   const isPublished = post.status === "PUBLISHED";
 
   return (
@@ -214,6 +214,13 @@ export function PublishingProgress({
         </div>
       )}
 
+      {post.targets?.filter(t => t.platform === "tiktok" && t.status === "UNKNOWN").map(t => <p key={t.id} role="alert" className="text-amber-800">{t.error_message || "TikTok publication needs manual review. Check TikTok before attempting another post."}</p>)}
+      {post.targets?.some(t => t.platform === "tiktok" && t.status === "PROCESSING") && <p role="status">TikTok is processing your video. Publication is awaiting confirmation.</p>}
+      {post.targets?.filter(t => t.status === "RETRYING" && t.error_message).map(t => (
+        <p key={t.id} role="status" className="text-amber-800">
+          {platformDisplayName(t.platform)} retry scheduled: {t.error_message}
+        </p>
+      ))}
       {/* Error details for failed targets */}
       {post.targets?.some((t) => t.status === "FAILED") && (
         <div className="space-y-1.5">

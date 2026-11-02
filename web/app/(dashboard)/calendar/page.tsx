@@ -2,10 +2,12 @@
 
 import { useCalendarPosts, useUpcomingPosts } from "@/features/posts/hooks/use-posts";
 import { cancelSchedule } from "@/features/posts/api/create-post";
+import { ReschedulePostDialog } from "@/components/posts/reschedule-post-dialog";
 import { StatusBadge } from "@/components/posts/status-badge";
 import type { PostResponse } from "@/types/post";
 import {
   CalendarDays,
+  CalendarClock,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -77,8 +79,10 @@ function LoadingSkeleton({ className }: { className?: string }) {
 function UpcomingPostItem({
   post,
   onCancelSchedule,
+  onReschedule,
 }: {
   post: PostResponse;
+  onReschedule: (post: PostResponse) => void;
   onCancelSchedule: (id: string) => void;
 }) {
   const scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null;
@@ -125,11 +129,17 @@ function UpcomingPostItem({
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Post options"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded transition-opacity hover:bg-muted sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
         >
           <MoreHorizontal className="h-4 w-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          {(post.status === "SCHEDULED" || post.status === "QUEUED") && (
+            <DropdownMenuItem onClick={() => onReschedule(post)}>
+              <CalendarClock className="mr-2 h-4 w-4" />
+              Reschedule
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             className="text-destructive focus:text-destructive"
             onClick={() => onCancelSchedule(post.id)}
@@ -152,6 +162,7 @@ function CalendarCell({
   posts,
   isToday,
   isCurrentMonth,
+  onReschedule,
 }: {
   day: number;
   year: number;
@@ -159,6 +170,7 @@ function CalendarCell({
   posts: PostResponse[];
   isToday: boolean;
   isCurrentMonth: boolean;
+  onReschedule: (post: PostResponse) => void;
 }) {
   // Suppress unused warnings — kept for future per-day navigation
   void year; void month;
@@ -193,11 +205,15 @@ function CalendarCell({
             new Set((post.targets ?? []).map((t) => t.platform)),
           );
           return (
-            <div
+            <button
+              type="button"
               key={post.id}
+              disabled={post.status !== "SCHEDULED" && post.status !== "QUEUED"}
+              onClick={() => onReschedule(post)}
+              aria-label={`Reschedule ${post.caption ?? post.title ?? "post"}`}
               title={post.caption ?? post.title ?? "(no caption)"}
               className={[
-                "flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium leading-tight",
+                "flex items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium leading-tight disabled:cursor-default",
                 post.status === "SCHEDULED"
                   ? "bg-primary/10 text-primary"
                   : "bg-muted text-muted-foreground",
@@ -209,7 +225,7 @@ function CalendarCell({
               <span className="truncate">
                 {post.caption ?? post.title ?? "(no caption)"}
               </span>
-            </div>
+            </button>
           );
         })}
 
@@ -229,6 +245,7 @@ export default function CalendarPage() {
   const today = useMemo(() => new Date(), []);
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
+  const [reschedulingPost, setReschedulingPost] = useState<PostResponse | null>(null);
 
   const rangeFrom = useMemo(() => startOfMonth(viewYear, viewMonth), [viewYear, viewMonth]);
   const rangeTo = useMemo(() => endOfMonth(viewYear, viewMonth), [viewYear, viewMonth]);
@@ -292,6 +309,13 @@ export default function CalendarPage() {
 
   return (
     <div className="space-y-6">
+      {reschedulingPost && (
+        <ReschedulePostDialog
+          key={reschedulingPost.id}
+          post={reschedulingPost}
+          onClose={() => setReschedulingPost(null)}
+        />
+      )}
       {/* Header */}
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -369,6 +393,7 @@ export default function CalendarPage() {
                       posts={postsByDay[day] ?? []}
                       isToday={isSameDay(cellDate, today)}
                       isCurrentMonth={true}
+                      onReschedule={setReschedulingPost}
                     />
                   );
                 })}
@@ -409,6 +434,7 @@ export default function CalendarPage() {
                     key={post.id}
                     post={post}
                     onCancelSchedule={handleCancelSchedule}
+                    onReschedule={setReschedulingPost}
                   />
                 ))
               )}
