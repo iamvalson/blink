@@ -1,10 +1,11 @@
 package tiktok
 
 type TikTokConfig struct {
-	ClientKey    string
-	ClientSecret string
-	Scopes       []string
-	RedirectURI  string
+	MediaURLPrefix string
+	ClientKey      string
+	ClientSecret   string
+	Scopes         []string
+	RedirectURI    string
 }
 
 type TikTokTokenResponse struct {

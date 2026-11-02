@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"fmt"
 	"net/http"
 	"os"
@@ -38,6 +36,7 @@ func main() {
 
 	if err := run(ctx); err != nil {
 		zlog.Error().Err(err).Msg("API server stopped with error")
+		os.Exit(1)
 	}
 }
 
@@ -107,9 +106,9 @@ func run(ctx context.Context) error {
 	postsRepo := storage.NewPostRepository(db)
 	outboxRepo := storage.NewOutboxRepository(db)
 
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	publicKey, privateKey, err := auth.LoadSigningKeys(cfg.JWTSigningKeyFile, !strings.EqualFold(cfg.Env, "production"))
 	if err != nil {
-		return fmt.Errorf("generate JWT keys: %w", err)
+		return fmt.Errorf("load persistent JWT signing key: %w", err)
 	}
 	jwtService := auth.NewJWTService(privateKey, publicKey)
 	signupService := service.NewSignupService(usersRepo, jwtService)
@@ -189,12 +188,33 @@ func run(ctx context.Context) error {
 	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector, tiktokConnector}
 	router := api.NewRouter(oauthConnectors, socialAccountRepo, postsRepo, cfg.EncryptionKey, tiktokConnector, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, tokenManager, mediaHandler)
 
+	// Keep signed delivery URLs outside request-URI loggers and redirecting routers.
+	var httpHandler http.Handler = router
+	if cfg.TikTokMediaURLPrefix != "" {
+		signer, err := mediastore.NewDeliverySigner(cfg.TikTokMediaURLPrefix, cfg.TikTokMediaSigningKey, cfg.TikTokMediaTTL)
+		if err != nil {
+			return err
+		}
+		delivery := handler.NewTikTokDeliveryHandler(signer, mediaRepo, mediaStore)
+		httpHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, mediastore.DeliveryPath) {
+				delivery.ServeHTTP(w, r)
+				return
+			}
+			router.ServeHTTP(w, r)
+		})
+	}
+	// The ownership file is public and takes precedence over signed media.
+	httpHandler, err = handler.WithTikTokVerification(httpHandler, cfg.TikTokVerificationFile, cfg.TikTokVerificationPath)
+	if err != nil {
+		return err
+	}
 	// HTTP Server
 	addr := fmt.Sprintf(":%d", cfg.Port)
 
 	server := &http.Server{
 		Addr:    addr,
-		Handler: router,
+		Handler: httpHandler,
 	}
 
 	serverErr := make(chan error, 1)

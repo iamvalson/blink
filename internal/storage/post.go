@@ -85,7 +85,7 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			pt.social_account_id,
 			sa.platform,
 			sa.platform_user_id,
-			pt.status,
+			CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END,
 			pa.platform_post_id,
 			pa.platform_url,
 			pa.error_code,
@@ -217,7 +217,7 @@ func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter
 		targetRows, err := r.db.Query(ctx, `
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
-				pt.status, pa.platform_post_id, pa.platform_url, pa.error_code,
+				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, pa.completed_at
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
@@ -512,6 +512,18 @@ func (r *PostRepository) CreatePost(
 		}
 	}
 
+	// Validate options by actual account, never by client-supplied platform labels.
+	for i, platform := range targetPlatforms {
+		if platform == "tiktok" {
+			o, ok := input.TikTokOptions[input.Targets[i].String()]
+			if !ok {
+				return nil, errors.New("TikTok publishing options are required")
+			}
+			if err := o.Validate(); err != nil {
+				return nil, err
+			}
+		}
+	}
 	// Validate media if referenced
 	var mediaContentType *string
 	var mediaContentTypes []string
@@ -571,7 +583,11 @@ func (r *PostRepository) CreatePost(
 
 	// Platform-specific validation
 	for _, p := range targetPlatforms {
-		if p == "youtube" {
+		if p == "tiktok" {
+			if len(mediaIDsToCheck) != 1 || len(mediaContentTypes) != 1 || !strings.HasPrefix(mediaContentTypes[0], "video/") {
+				return nil, errors.New("TikTok publishing requires exactly one completed video")
+			}
+		} else if p == "youtube" {
 			if input.MediaID == nil {
 				return nil, errors.New("YouTube publishing requires a video")
 			}
@@ -754,6 +770,15 @@ func (r *PostRepository) CreatePost(
 			return nil, fmt.Errorf("create post target: %w", err)
 		}
 
+		if o, ok := input.TikTokOptions[socialAccountID.String()]; ok {
+			raw, marshalErr := json.Marshal(o)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			if _, err = tx.Exec(ctx, `UPDATE post_targets SET tiktok_options=$2 WHERE id=$1`, postTargetID, raw); err != nil {
+				return nil, err
+			}
+		}
 		// Create publication attempt
 		_, err = tx.Exec(
 			ctx,
@@ -953,15 +978,17 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 
 func hashCreatePostRequest(input model.CreatePostInput) (string, error) {
 	data := struct {
-		Caption       *string     `json:"caption"`
-		MediaURL      *string     `json:"media_url"`
-		MediaType     *string     `json:"media_type"`
-		MediaID       *uuid.UUID  `json:"media_id,omitempty"`
-		MediaIDs      []uuid.UUID `json:"media_ids,omitempty"`
-		Targets       []uuid.UUID `json:"targets"`
-		ContentFormat string      `json:"content_format"`
-		ScheduledAt   *time.Time  `json:"scheduled_at,omitempty"`
+		TikTokOptions map[string]model.TikTokOptions `json:"tiktok_options,omitempty"`
+		Caption       *string                        `json:"caption"`
+		MediaURL      *string                        `json:"media_url"`
+		MediaType     *string                        `json:"media_type"`
+		MediaID       *uuid.UUID                     `json:"media_id,omitempty"`
+		MediaIDs      []uuid.UUID                    `json:"media_ids,omitempty"`
+		Targets       []uuid.UUID                    `json:"targets"`
+		ContentFormat string                         `json:"content_format"`
+		ScheduledAt   *time.Time                     `json:"scheduled_at,omitempty"`
 	}{
+		TikTokOptions: input.TikTokOptions,
 		Caption:       input.Caption,
 		MediaURL:      input.MediaURL,
 		MediaType:     input.MediaType,
@@ -1181,7 +1208,7 @@ func (r *PostRepository) ListCalendarPosts(ctx context.Context, userID uuid.UUID
 		targetRows, err := r.db.Query(ctx, `
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
-				pt.status, pa.platform_post_id, pa.platform_url, pa.error_code,
+				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, pa.completed_at
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
@@ -1287,7 +1314,7 @@ func (r *PostRepository) ListUpcomingPosts(ctx context.Context, userID uuid.UUID
 		targetRows, err := r.db.Query(ctx, `
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
-				pt.status, pa.platform_post_id, pa.platform_url, pa.error_code,
+				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, pa.completed_at
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id

@@ -15,9 +15,10 @@ import (
 )
 
 type Connector struct {
-	oauthConfig *oauth2.Config
-	accessToken string
-	httpClient  *http.Client
+	mediaURLPrefix string
+	oauthConfig    *oauth2.Config
+	accessToken    string
+	httpClient     *http.Client
 }
 
 var _ connectors.OAuthConnector = (*Connector)(nil)
@@ -34,8 +35,9 @@ func New(cfg TikTokConfig, client ...*http.Client) *Connector {
 	}
 
 	return &Connector{
-		oauthConfig: NewOAuthConfig(cfg),
-		httpClient:  hc,
+		oauthConfig:    NewOAuthConfig(cfg),
+		mediaURLPrefix: cfg.MediaURLPrefix,
+		httpClient:     hc,
 	}
 }
 
@@ -235,6 +237,10 @@ func (c *Connector) classifyHTTPStatusError(statusCode int, headers http.Header,
 }
 
 func classifyTikTokAPIError(code, message, logID string, statusCode int, headers http.Header) error {
+	if code == "unaudited_client_can_only_post_to_private_accounts" {
+		return &connectors.ClassifiedError{Class: connectors.ErrorPermanent, Code: code, StatusCode: statusCode, Err: errors.New("TikTok requires a private creator account for unaudited apps. Set your TikTok account to private and select Only me visibility before retrying.")}
+	}
+
 	msg := strings.TrimSpace(message)
 	if msg == "" {
 		msg = code

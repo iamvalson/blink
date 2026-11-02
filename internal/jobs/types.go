@@ -1,5 +1,6 @@
 package jobs
 
 const (
-	TypePublishPost = "post:publish"
+	TypePublishPost  = "post:publish"
+	TypeTikTokStatus = "tiktok:status"
 )

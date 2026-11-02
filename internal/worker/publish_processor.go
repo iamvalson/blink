@@ -53,15 +53,19 @@ type mediaRepository interface {
 }
 
 type PublishProcessor struct {
-	posts         *storage.PostRepository
-	publications  publicationStore
-	acquire       acquirePublishLock
-	connectors    map[string]connectors.PlatformConnector
-	encryptionKey string
-	scheduler     publishScheduler
-	mediaRepo     mediaRepository
-	mediaStore    mediaStore
-	tokenManager  *apiservice.TokenManagerService
+	posts             *storage.PostRepository
+	publications      publicationStore
+	acquire           acquirePublishLock
+	connectors        map[string]connectors.PlatformConnector
+	encryptionKey     string
+	scheduler         publishScheduler
+	mediaRepo         mediaRepository
+	mediaStore        mediaStore
+	tokenManager      *apiservice.TokenManagerService
+	deliverySigner    *mediastore.DeliverySigner
+	asyncPollInterval time.Duration
+	asyncPollDeadline time.Duration
+	videoProbe        func(context.Context, string) (float64, error)
 }
 
 func (p *PublishProcessor) WithMediaStore(repo mediaRepository, store mediaStore) *PublishProcessor {
@@ -205,6 +209,9 @@ func (p *PublishProcessor) ProcessPublishJob(
 			return err
 		}
 
+		if job.AttemptID != nil && attempt.ID != *job.AttemptID {
+			continue
+		}
 		if attempt.ErrorCode != nil &&
 			*attempt.ErrorCode == "MANUAL_REVIEW_REQUIRED" {
 			continue
@@ -218,7 +225,17 @@ func (p *PublishProcessor) ProcessPublishJob(
 
 		platform, publishErr := processor.processTarget(ctx, post, &target)
 		if publishErr == nil {
-			metrics.JobSucceeded(platform)
+			if _, isAsync := processor.connectors[platform].(connectors.AsyncVideoPublisher); isAsync {
+				latest, loadErr := repo.GetPublicationAttempt(ctx, target.ID)
+				if loadErr != nil {
+					return loadErr
+				}
+				if latest.Status == "SUCCEEDED" {
+					metrics.JobSucceeded(platform)
+				}
+			} else {
+				metrics.JobSucceeded(platform)
+			}
 			continue
 		}
 
@@ -323,6 +340,9 @@ func (p *PublishProcessor) publishToTarget(
 		return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
 	}
 
+	if async, ok := connector.(connectors.AsyncVideoPublisher); ok {
+		return p.publishAsyncVideo(ctx, post, target, attempt, account, connector, async)
+	}
 	accessToken, refreshed, err := p.ensureAccessToken(ctx, account, connector)
 	if err != nil {
 		if recoveryRequired {

@@ -30,7 +30,8 @@ type Config struct {
 	ShutdownTimeout time.Duration
 
 	// Encryption
-	EncryptionKey string
+	EncryptionKey     string
+	JWTSigningKeyFile string
 
 	// Platform Mode (real, mock)
 	PlatformMode string
@@ -49,6 +50,14 @@ type Config struct {
 	R2Region                    string
 	MediaMaxUploadBytes         int64
 	MediaPresignedURLTTLSeconds int
+
+	TikTokVerificationFile string
+	TikTokVerificationPath string
+	TikTokMediaURLPrefix   string
+	TikTokMediaSigningKey  string
+	TikTokMediaTTL         time.Duration
+	TikTokPollInterval     time.Duration
+	TikTokPollDeadline     time.Duration
 
 	// CORS Origins
 	CORSOrigins []string
@@ -81,6 +90,14 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
+		JWTSigningKeyFile:           getEnv("JWT_SIGNING_KEY_FILE", "./.secrets/jwt-signing-key.pem"),
+		TikTokVerificationFile:      getEnv("TIKTOK_VERIFICATION_FILE", ""),
+		TikTokVerificationPath:      getEnv("TIKTOK_VERIFICATION_PATH", ""),
+		TikTokMediaURLPrefix:        getEnv("TIKTOK_MEDIA_URL_PREFIX", ""),
+		TikTokMediaSigningKey:       getEnv("TIKTOK_MEDIA_SIGNING_KEY", ""),
+		TikTokMediaTTL:              getEnvDuration("TIKTOK_MEDIA_TTL", 2*time.Hour),
+		TikTokPollInterval:          getEnvDuration("TIKTOK_POLL_INTERVAL", 30*time.Second),
+		TikTokPollDeadline:          getEnvDuration("TIKTOK_POLL_DEADLINE", 24*time.Hour),
 		Port:                        getEnvInt("PORT", 8000),
 		Env:                         env,
 		SecureCookie:                production,

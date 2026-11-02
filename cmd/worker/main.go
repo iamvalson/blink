@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -13,6 +14,7 @@ import (
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
 	"github.com/iamvalson/blink/internal/jobs"
@@ -31,6 +33,7 @@ func main() {
 
 	if err := run(ctx); err != nil {
 		log.Error().Err(err).Msg("Worker stopped with error")
+		os.Exit(1)
 	}
 }
 
@@ -140,11 +143,13 @@ func run(ctx context.Context) error {
 	}
 	youtubeConnector := youtube.New(youtubeCfg)
 
+	tiktokConnector := tiktok.New(tiktok.TikTokConfig{ClientKey: os.Getenv("TIKTOK_CLIENT_KEY"), ClientSecret: os.Getenv("TIKTOK_CLIENT_SECRET"), RedirectURI: os.Getenv("TIKTOK_REDIRECT_URI"), Scopes: strings.Split(os.Getenv("TIKTOK_SCOPES"), ","), MediaURLPrefix: cfg.TikTokMediaURLPrefix})
 	// To add a new publish platform, add it to this map.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	platformConnectors := map[string]connectors.PlatformConnector{
 		connectors.PlatformTwitter: twitterConnector,
 		connectors.PlatformYoutube: youtubeConnector,
+		connectors.PlatformTikTok:  tiktokConnector,
 	}
 
 	// Create worker server
@@ -164,7 +169,18 @@ func run(ctx context.Context) error {
 	processor := worker.NewPublishProcessor(postsRepo, publicationsRepo, platformConnectors, encryptionKey, retryClient).
 		WithMediaStore(mediaRepo, mediaStore).WithTokenManager(tokenManager)
 
+	if cfg.TikTokMediaURLPrefix != "" {
+		if _, err := exec.LookPath("ffprobe"); err != nil {
+			log.Warn().Str("platform", "tiktok").Msg("ffprobe is missing: install FFmpeg before publishing TikTok videos")
+		}
+		signer, err := mediastore.NewDeliverySigner(cfg.TikTokMediaURLPrefix, cfg.TikTokMediaSigningKey, cfg.TikTokMediaTTL)
+		if err != nil {
+			return err
+		}
+		processor.WithAsyncPublishing(signer, cfg.TikTokPollInterval, cfg.TikTokPollDeadline)
+	}
 	mux.HandleFunc(jobs.TypePublishPost, processor.ProcessPublishJob)
+	mux.HandleFunc(jobs.TypeTikTokStatus, processor.ProcessTikTokStatusJob)
 
 	log.Info().Msg("Job handlers registered")
 
