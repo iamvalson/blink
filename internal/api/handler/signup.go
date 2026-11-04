@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"unicode"
 
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
@@ -36,34 +35,7 @@ type signupResponse struct {
 	UserID string `json:"user_id"`
 }
 
-func validPassword(password string) bool {
-	if len([]rune(password)) < 8 {
-		return false
-	}
-	if len([]rune(password)) > 128 {
-		return false
-	}
-
-	var hasUpper bool
-	var hasLower bool
-	var hasNumber bool
-	var hasSymbol bool
-
-	for _, char := range password {
-		switch {
-		case unicode.IsUpper(char):
-			hasUpper = true
-		case unicode.IsLower(char):
-			hasLower = true
-		case unicode.IsNumber(char):
-			hasNumber = true
-		case unicode.IsPunct(char) || unicode.IsSymbol(char):
-			hasSymbol = true
-		}
-	}
-
-	return hasUpper && hasLower && hasNumber && hasSymbol
-}
+func validPassword(password string) bool { return auth.ValidateNewPassword(password) == nil }
 
 func (h *SignupHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	var req signupRequest

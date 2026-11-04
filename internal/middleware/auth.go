@@ -31,7 +31,7 @@ func RequireAuth(jwtService *auth.JWTService) func(http.Handler) http.Handler {
 				return
 			}
 
-			userID, err := jwtService.ValidateAccessToken(cookie.Value)
+			userID, err := jwtService.ValidateAccessTokenContext(r.Context(), cookie.Value)
 			if err != nil {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return

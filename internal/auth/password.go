@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"unicode"
 
 	"github.com/alexedwards/argon2id"
 )
@@ -53,5 +54,28 @@ func ValidatePassword(password string) error {
 		return ErrPasswordTooLong
 	}
 
+	return nil
+}
+
+func ValidateNewPassword(password string) error {
+	if ValidatePassword(password) != nil {
+		return ErrInvalidPassword
+	}
+	var upper, lower, number, symbol bool
+	for _, character := range password {
+		switch {
+		case unicode.IsUpper(character):
+			upper = true
+		case unicode.IsLower(character):
+			lower = true
+		case unicode.IsNumber(character):
+			number = true
+		case unicode.IsPunct(character) || unicode.IsSymbol(character):
+			symbol = true
+		}
+	}
+	if !upper || !lower || !number || !symbol {
+		return ErrInvalidPassword
+	}
 	return nil
 }

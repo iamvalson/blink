@@ -14,6 +14,8 @@ func TestAuthBodiesAreFullyBoundedAndSingleJSON(t *testing.T) {
 	}{
 		{"login", NewLoginHandler(nil, false, true, http.SameSiteLaxMode).Login},
 		{"signup", NewSignupHandler(nil, false, true, http.SameSiteLaxMode).Signup},
+		{"forgot-password", NewPasswordRecoveryHandler(nil, true, http.SameSiteLaxMode).Forgot},
+		{"reset-password", NewPasswordRecoveryHandler(nil, true, http.SameSiteLaxMode).Reset},
 	} {
 		for _, tc := range []struct {
 			name, body string

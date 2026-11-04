@@ -49,7 +49,7 @@ func TestSignupCreatesUserWithHashedPassword(t *testing.T) {
 	users, jwtService, db, cleanup := newServiceTestDependencies(t)
 	defer cleanup()
 
-	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash FROM users WHERE email = $1")).
+	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash, session_version FROM users WHERE email = $1")).
 		WithArgs("person@example.com").
 		WillReturnError(pgx.ErrNoRows)
 	db.ExpectQuery("INSERT INTO users").
@@ -87,10 +87,10 @@ func TestSignupRejectsDuplicateEmail(t *testing.T) {
 	users, jwtService, db, cleanup := newServiceTestDependencies(t)
 	defer cleanup()
 
-	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash FROM users WHERE email = $1")).
+	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash, session_version FROM users WHERE email = $1")).
 		WithArgs("person@example.com").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "email", "display_name", "password_hash"}).AddRow(
-			"user-123", "person@example.com", "Person", "existing-hash",
+		WillReturnRows(pgxmock.NewRows([]string{"id", "email", "display_name", "password_hash", "session_version"}).AddRow(
+			"user-123", "person@example.com", "Person", "existing-hash", int64(0),
 		))
 
 	service := NewSignupService(users, jwtService)
@@ -117,10 +117,10 @@ func TestLoginSucceedsWithValidCredentials(t *testing.T) {
 		t.Fatalf("HashPassword failed: %v", err)
 	}
 
-	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash FROM users WHERE email = $1")).
+	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash, session_version FROM users WHERE email = $1")).
 		WithArgs("person@example.com").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "email", "display_name", "password_hash"}).AddRow(
-			"user-123", "person@example.com", "Person", passwordHash,
+		WillReturnRows(pgxmock.NewRows([]string{"id", "email", "display_name", "password_hash", "session_version"}).AddRow(
+			"user-123", "person@example.com", "Person", passwordHash, int64(0),
 		))
 
 	service := NewLoginService(users, jwtService)
@@ -162,10 +162,10 @@ func TestLoginRejectsInvalidCredentials(t *testing.T) {
 		t.Fatalf("HashPassword failed: %v", err)
 	}
 
-	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash FROM users WHERE email = $1")).
+	db.ExpectQuery(regexp.QuoteMeta("SELECT id, email, display_name, password_hash, session_version FROM users WHERE email = $1")).
 		WithArgs("person@example.com").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "email", "display_name", "password_hash"}).AddRow(
-			"user-123", "person@example.com", "Person", passwordHash,
+		WillReturnRows(pgxmock.NewRows([]string{"id", "email", "display_name", "password_hash", "session_version"}).AddRow(
+			"user-123", "person@example.com", "Person", passwordHash, int64(0),
 		))
 	service := NewLoginService(users, jwtService)
 	_, err = service.Login(context.Background(), LoginInput{

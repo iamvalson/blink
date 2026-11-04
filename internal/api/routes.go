@@ -45,6 +45,7 @@ func NewRouter(
 	cookieSameSite http.SameSite,
 	tokenManager *service.TokenManagerService,
 	authProtection *middleware.AuthProtection,
+	recoveryService *service.PasswordRecoveryService,
 	mediaHandlers ...*handler.MediaHandler,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -76,6 +77,9 @@ func NewRouter(
 
 	r.With(authProtection.Signup).Post("/auth/signup", signupHandler.Signup)
 	r.With(authProtection.Login).Post("/auth/login", loginHandler.Login)
+	recoveryHandler := handler.NewPasswordRecoveryHandler(recoveryService, cookieSecure, cookieSameSite)
+	r.With(authProtection.ForgotPassword).Post("/auth/forgot-password", recoveryHandler.Forgot)
+	r.With(authProtection.ResetPassword).Post("/auth/reset-password", recoveryHandler.Reset)
 	r.Post("/auth/logout", handler.NewLogoutHandler(cookieSecure, cookieSameSite))
 	r.With(middleware.RequireAuth(jwtService)).Get("/auth/me", meHandler.Me)
 

@@ -14,10 +14,11 @@ var (
 )
 
 type User struct {
-	ID           string
-	Email        string
-	DisplayName  string
-	PasswordHash string
+	ID             string
+	Email          string
+	DisplayName    string
+	PasswordHash   string
+	SessionVersion int64
 }
 
 type UserRepository struct {
@@ -83,12 +84,12 @@ func (r *UserRepository) GetByEmail(
 	email string,
 ) (*User, error) {
 	const query = `
-		SELECT id, email, display_name, password_hash FROM users WHERE email = $1
+		SELECT id, email, display_name, password_hash, session_version FROM users WHERE email = $1
 	`
 
 	var user User
 
-	err := r.db.QueryRow(ctx, query, email).Scan(&user.ID, &user.Email, &user.DisplayName, &user.PasswordHash)
+	err := r.db.QueryRow(ctx, query, email).Scan(&user.ID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.SessionVersion)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -97,4 +98,10 @@ func (r *UserRepository) GetByEmail(
 		return nil, fmt.Errorf("get user by email: %w", err)
 	}
 	return &user, nil
+}
+
+func (r *UserRepository) SessionVersion(ctx context.Context, id string) (int64, error) {
+	var version int64
+	err := r.db.QueryRow(ctx, "SELECT session_version FROM users WHERE id=$1", id).Scan(&version)
+	return version, err
 }

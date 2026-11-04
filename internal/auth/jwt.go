@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -17,7 +18,12 @@ const (
 	audience             = "blink-api"
 )
 
+type SessionVersionStore interface {
+	SessionVersion(context.Context, string) (int64, error)
+}
+
 type JWTService struct {
+	sessions   SessionVersionStore
 	privateKey ed25519.PrivateKey
 	publicKey  ed25519.PublicKey
 }
@@ -32,8 +38,14 @@ func NewJWTService(
 	}
 }
 
+func (s *JWTService) WithSessionVersionStore(store SessionVersionStore) *JWTService {
+	s.sessions = store
+	return s
+}
+
 type Claims struct {
-	TokenType string `json:"token_type"`
+	SessionVersion int64  `json:"session_version,omitempty"`
+	TokenType      string `json:"token_type"`
 	jwt.RegisteredClaims
 }
 
@@ -46,6 +58,10 @@ func AccessTokenLifetime(rememberMe bool) time.Duration {
 }
 
 func (s *JWTService) CreateAccessToken(userID string, rememberMe bool) (string, error) {
+	return s.CreateAccessTokenVersion(userID, rememberMe, 0)
+}
+
+func (s *JWTService) CreateAccessTokenVersion(userID string, rememberMe bool, version int64) (string, error) {
 	now := time.Now()
 
 	jti, err := generateJTI()
@@ -54,7 +70,8 @@ func (s *JWTService) CreateAccessToken(userID string, rememberMe bool) (string, 
 	}
 
 	claims := Claims{
-		TokenType: "access",
+		SessionVersion: version,
+		TokenType:      "access",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			Issuer:    issuer,
@@ -76,6 +93,10 @@ func (s *JWTService) CreateAccessToken(userID string, rememberMe bool) (string, 
 }
 
 func (s *JWTService) ValidateAccessToken(tokenString string) (string, error) {
+	return s.ValidateAccessTokenContext(context.Background(), tokenString)
+}
+
+func (s *JWTService) ValidateAccessTokenContext(ctx context.Context, tokenString string) (string, error) {
 	var claims Claims
 
 	token, err := jwt.ParseWithClaims(
@@ -106,6 +127,12 @@ func (s *JWTService) ValidateAccessToken(tokenString string) (string, error) {
 		return "", fmt.Errorf("token subject is missing")
 	}
 
+	if s.sessions != nil {
+		version, err := s.sessions.SessionVersion(ctx, claims.Subject)
+		if err != nil || version != claims.SessionVersion {
+			return "", fmt.Errorf("session is no longer valid")
+		}
+	}
 	return claims.Subject, nil
 }
 

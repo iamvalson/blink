@@ -156,3 +156,10 @@ func (p *AuthProtection) clientIP(r *http.Request) (netip.Addr, error) {
 	}
 	return peer, nil
 }
+
+func (p *AuthProtection) ForgotPassword(next http.Handler) http.Handler {
+	return p.protect("forgot-password", 5, 15*time.Minute, next)
+}
+func (p *AuthProtection) ResetPassword(next http.Handler) http.Handler {
+	return p.protect("reset-password", 10, 15*time.Minute, next)
+}
