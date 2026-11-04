@@ -400,3 +400,5 @@ Blink is under active development. See [`LICENSE`](LICENSE) for licensing detail
 ### Deployment readiness
 
 See [deployment readiness](docs/deployment-readiness.md) for runtime images with ffprobe, persisted authentication keys, tracked migrations and one-time adoption of manually initialized databases. Existing deployments must establish migration history before running the new `make migrate-up`. Never run a rollback against active publishing jobs.
+
+Authentication rate limits, trusted proxy configuration, and safe request logging are documented in [authentication protection](docs/authentication-protection.md).

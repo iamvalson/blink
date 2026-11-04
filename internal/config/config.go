@@ -59,8 +59,9 @@ type Config struct {
 	TikTokPollInterval     time.Duration
 	TikTokPollDeadline     time.Duration
 
-	// CORS Origins
-	CORSOrigins []string
+	// HTTP access policy
+	CORSOrigins           []string
+	AuthTrustedProxyCIDRs string
 }
 
 func Load() (*Config, error) {
@@ -90,6 +91,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
+		AuthTrustedProxyCIDRs:       getEnv("AUTH_TRUSTED_PROXY_CIDRS", ""),
 		JWTSigningKeyFile:           getEnv("JWT_SIGNING_KEY_FILE", "./.secrets/jwt-signing-key.pem"),
 		TikTokVerificationFile:      getEnv("TIKTOK_VERIFICATION_FILE", ""),
 		TikTokVerificationPath:      getEnv("TIKTOK_VERIFICATION_PATH", ""),

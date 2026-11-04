@@ -68,8 +68,7 @@ func validPassword(password string) bool {
 func (h *SignupHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	var req signupRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+	if !decodeAuthJSON(w, r, &req) {
 		return
 	}
 
