@@ -3,6 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"strconv"
@@ -303,4 +305,68 @@ func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Error().Err(err).Msg("failed to encode media upload response")
 	}
+}
+
+// GetMediaContent streams an owner's uploaded media, including video byte ranges.
+func (h *MediaHandler) GetMediaContent(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	user, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, err := uuid.Parse(user)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+	mediaID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "Invalid media ID", http.StatusBadRequest)
+		return
+	}
+	record, body, err := h.mediaService.OpenMedia(r.Context(), mediaID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrMediaNotFound), errors.Is(err, service.ErrMediaIncomplete):
+			http.Error(w, "Media not found", http.StatusNotFound)
+		default:
+			http.Error(w, "Media temporarily unavailable", http.StatusServiceUnavailable)
+		}
+		return
+	}
+	defer body.Close()
+	start, end, status := int64(0), record.FileSize-1, http.StatusOK
+	if value := r.Header.Get("Range"); value != "" {
+		var valid bool
+		start, end, valid = deliveryRange(value, record.FileSize)
+		if !valid {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", record.FileSize))
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		status = http.StatusPartialContent
+	}
+	if start > 0 {
+		if seeker, ok := body.(io.Seeker); ok {
+			_, err = seeker.Seek(start, io.SeekStart)
+		} else {
+			// Stream without buffering entire videos when storage cannot seek.
+			_, err = io.CopyN(io.Discard, body, start)
+		}
+		if err != nil {
+			http.Error(w, "Media temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", record.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": record.OriginalFilename}))
+	if status == http.StatusPartialContent {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, record.FileSize))
+	}
+	w.WriteHeader(status)
+	_, _ = io.CopyN(w, body, end-start+1)
 }

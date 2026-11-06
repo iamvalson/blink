@@ -386,3 +386,22 @@ func (s *MediaService) Upload(ctx context.Context, input UploadInput) (*model.Me
 	record.FileSize = n
 	return record, nil
 }
+
+// OpenMedia checks ownership before opening a completed upload for preview.
+func (s *MediaService) OpenMedia(ctx context.Context, mediaID, userID uuid.UUID) (*model.Media, io.ReadCloser, error) {
+	record, err := s.media.GetMedia(ctx, mediaID, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if record.UploadStatus != "complete" {
+		return nil, nil, ErrMediaIncomplete
+	}
+	if !allowedContentTypes[record.ContentType] {
+		return nil, nil, ErrUnsupportedMediaType
+	}
+	body, err := s.store.Get(ctx, record.StorageKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return record, body, nil
+}

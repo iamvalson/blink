@@ -108,9 +108,9 @@ function UpcomingPostItem({
       </div>
 
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium leading-snug">
+        <Link href={`/posts/${post.id}`} className="block truncate text-sm font-medium leading-snug hover:underline">
           {post.caption ?? post.title ?? "(no caption)"}
-        </p>
+        </Link>
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
           {scheduledAt && (
             <span className="text-xs text-muted-foreground">
@@ -162,7 +162,6 @@ function CalendarCell({
   posts,
   isToday,
   isCurrentMonth,
-  onReschedule,
 }: {
   day: number;
   year: number;
@@ -170,7 +169,6 @@ function CalendarCell({
   posts: PostResponse[];
   isToday: boolean;
   isCurrentMonth: boolean;
-  onReschedule: (post: PostResponse) => void;
 }) {
   // Suppress unused warnings — kept for future per-day navigation
   void year; void month;
@@ -205,12 +203,10 @@ function CalendarCell({
             new Set((post.targets ?? []).map((t) => t.platform)),
           );
           return (
-            <button
-              type="button"
+            <Link
+              href={`/posts/${post.id}`}
               key={post.id}
-              disabled={post.status !== "SCHEDULED" && post.status !== "QUEUED"}
-              onClick={() => onReschedule(post)}
-              aria-label={`Reschedule ${post.caption ?? post.title ?? "post"}`}
+              aria-label={`View details for ${post.caption ?? post.title ?? "post"}`}
               title={post.caption ?? post.title ?? "(no caption)"}
               className={[
                 "flex items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium leading-tight disabled:cursor-default",
@@ -225,7 +221,7 @@ function CalendarCell({
               <span className="truncate">
                 {post.caption ?? post.title ?? "(no caption)"}
               </span>
-            </button>
+            </Link>
           );
         })}
 
@@ -267,6 +263,7 @@ export default function CalendarPage() {
           queryKey: calendarQueryKey(rangeFrom.toISOString(), rangeTo.toISOString()),
         });
         queryClient.invalidateQueries({ queryKey: upcomingQueryKey(20, 0) });
+        queryClient.invalidateQueries({ queryKey: ["posts"] });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Failed to cancel schedule.";
         toast.error(msg);
@@ -325,7 +322,7 @@ export default function CalendarPage() {
           </p>
         </div>
         <Button>
-          <Link href="/posts" className="flex items-center gap-2">
+          <Link href="/posts/new" className="flex items-center gap-2">
             <CalendarDays className="h-4 w-4" />
             New post
           </Link>
@@ -393,7 +390,6 @@ export default function CalendarPage() {
                       posts={postsByDay[day] ?? []}
                       isToday={isSameDay(cellDate, today)}
                       isCurrentMonth={true}
-                      onReschedule={setReschedulingPost}
                     />
                   );
                 })}
@@ -422,7 +418,7 @@ export default function CalendarPage() {
                   <p className="font-medium">No upcoming posts</p>
                   <p className="mt-1 text-xs">Schedule a post from the composer.</p>
                   <Link
-                    href="/posts"
+                    href="/posts/new"
                     className="mt-2 inline-block text-xs text-primary hover:underline"
                   >
                     Create a post →

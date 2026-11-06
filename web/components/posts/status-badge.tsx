@@ -53,6 +53,11 @@ const STATUS_CONFIG: Record<
       "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800",
     icon: CheckCircle2,
   },
+  PARTIALLY_PUBLISHED: {
+    label: "Partially published",
+    colorClass: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800",
+    icon: AlertCircle,
+  },
   FAILED: {
     label: "Failed",
     colorClass:

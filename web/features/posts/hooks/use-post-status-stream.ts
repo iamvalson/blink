@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { postQueryKey, postsQueryKey } from "./use-posts";
+import { postQueryKey } from "./use-posts";
 import type { PostResponse } from "@/types/post";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
@@ -58,7 +58,8 @@ export function usePostStatusStream(
         queryClient.setQueryData(postQueryKey(postId), post);
 
         // Invalidate list caches — they will refetch on next render.
-        queryClient.invalidateQueries({ queryKey: postsQueryKey() });
+        queryClient.invalidateQueries({ queryKey: ["posts"] });
+        queryClient.invalidateQueries({ queryKey: ["calendar"] });
 
         if (TERMINAL_STATUSES.has(post.status)) {
           es.close();
@@ -73,7 +74,7 @@ export function usePostStatusStream(
       es.close();
       esRef.current = null;
       // Final invalidation so the list shows the resolved state.
-      queryClient.invalidateQueries({ queryKey: postsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
     };
 
     const handleError = () => {

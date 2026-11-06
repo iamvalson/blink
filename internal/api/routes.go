@@ -152,6 +152,8 @@ func NewRouter(
 		r.With(middleware.RequireAuth(jwtService)).Post("/api/media/{id}/complete", mh.CompleteUpload)
 
 		r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/media/{id}", mh.GetMedia)
+		r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/media/{id}/content", mh.GetMediaContent)
+		r.With(middleware.RequireAuth(jwtService)).Get("/api/media/{id}/content", mh.GetMediaContent)
 		r.With(middleware.RequireAuth(jwtService)).Get("/api/media/{id}", mh.GetMedia)
 
 		r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/media/{id}", mh.DeleteMedia)

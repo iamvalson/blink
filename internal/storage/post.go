@@ -139,7 +139,10 @@ func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter
 	argIdx := 2
 
 	if filter.Status != "" {
-		if filter.Status == "OVERDUE" {
+		if filter.Status == "FAILED" {
+			// A partial publication still has failed destinations that need attention.
+			conditions = append(conditions, "p.status IN ('FAILED', 'PARTIALLY_PUBLISHED')")
+		} else if filter.Status == "OVERDUE" {
 			conditions = append(conditions, "p.status = 'SCHEDULED' AND p.scheduled_at < NOW()")
 		} else {
 			conditions = append(conditions, fmt.Sprintf("p.status = $%d", argIdx))

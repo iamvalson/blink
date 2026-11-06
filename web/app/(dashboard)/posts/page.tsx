@@ -8,7 +8,9 @@ export const metadata = {
   description: "Manage and monitor your published and scheduled posts.",
 };
 
-export default function PostsPage() {
+export default async function PostsPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
+  const { status } = await searchParams;
+  const initialStatus = ["SCHEDULED", "QUEUED", "PUBLISHING", "PUBLISHED", "FAILED", "PARTIALLY_PUBLISHED"].includes(status ?? "") ? status : undefined;
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="mb-8 flex items-center justify-between">
@@ -24,7 +26,7 @@ export default function PostsPage() {
         </Link>
       </div>
 
-      <PostsList />
+      <PostsList key={initialStatus ?? "all"} initialStatus={initialStatus} />
     </div>
   );
 }
