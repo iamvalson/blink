@@ -37,8 +37,12 @@ type loginResponse struct {
 func (h *LoginHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+	if !decodeAuthJSON(w, r, &req) {
+		return
+	}
+
+	if len([]rune(req.Password)) > 128 {
+		http.Error(w, "invalid credentials", http.StatusBadRequest)
 		return
 	}
 

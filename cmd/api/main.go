@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,12 +21,15 @@ import (
 	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
+	"github.com/iamvalson/blink/internal/email"
 	"github.com/iamvalson/blink/internal/jobs"
 	applog "github.com/iamvalson/blink/internal/log"
 	"github.com/iamvalson/blink/internal/mediastore"
+	"github.com/iamvalson/blink/internal/middleware"
 	"github.com/iamvalson/blink/internal/outbox"
 	"github.com/iamvalson/blink/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	zlog "github.com/rs/zerolog/log"
 )
@@ -110,10 +114,31 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load persistent JWT signing key: %w", err)
 	}
-	jwtService := auth.NewJWTService(privateKey, publicKey)
+	jwtService := auth.NewJWTService(privateKey, publicKey).WithSessionVersionStore(usersRepo)
 	signupService := service.NewSignupService(usersRepo, jwtService)
 	loginService := service.NewLoginService(usersRepo, jwtService)
 	meService := service.NewMeService(usersRepo)
+
+	var recoveryService *service.PasswordRecoveryService
+	mailer, mailErr := email.NewResend(cfg.ResendAPIKey, cfg.EmailFrom)
+	if mailErr != nil {
+		if !errors.Is(mailErr, email.ErrNotConfigured) || cfg.ResendAPIKey != "" || cfg.EmailFrom != "" || strings.EqualFold(cfg.Env, "production") {
+			return fmt.Errorf("configure password recovery: %w", mailErr)
+		}
+		zlog.Warn().Msg("Password recovery disabled: configure RESEND_API_KEY and EMAIL_FROM")
+	} else {
+		recoveryService, err = service.NewPasswordRecoveryService(storage.NewPasswordRecoveryRepository(db), mailer,
+			cfg.EncryptionKey, cfg.FrontendURL, strings.EqualFold(cfg.Env, "production"))
+		if err != nil {
+			return err
+		}
+		// The dispatcher has its own lifecycle so email delivery cannot block publishing.
+		recoveryCtx, stopRecovery := context.WithCancel(ctx)
+		var recoveryWG sync.WaitGroup
+		recoveryWG.Add(1)
+		go func() { defer recoveryWG.Done(); recoveryService.Run(recoveryCtx) }()
+		defer func() { stopRecovery(); recoveryWG.Wait() }()
+	}
 
 	// Initialize Redis for Asynq job queue
 	redisURL := os.Getenv("REDIS_URL")
@@ -132,6 +157,36 @@ func run(ctx context.Context) error {
 		}
 		zlog.Info().Str("event", "redis_shutdown_completed").Msg("Redis closed")
 	}()
+
+	// Use the same Redis deployment for shared authentication counters.
+	var rateOptions *redis.Options
+	if strings.Contains(cfg.RedisURL, "://") {
+		rateOptions, err = redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			return fmt.Errorf("invalid authentication Redis URL: %w", err)
+		}
+	} else {
+		rateOptions = &redis.Options{Addr: cfg.RedisURL}
+	}
+	rateOptions.DialTimeout = time.Second
+	rateOptions.ReadTimeout = time.Second
+	rateOptions.WriteTimeout = time.Second
+	rateOptions.PoolTimeout = time.Second
+	rateOptions.ContextTimeoutEnabled = true
+	rateOptions.MaxRetries = -1
+	rateOptions.PoolSize = 4
+	rateRedis := redis.NewClient(rateOptions)
+	defer func() { _ = rateRedis.Close() }()
+	rateCtx, rateCancel := context.WithTimeout(ctx, 5*time.Second)
+	rateErr := rateRedis.Ping(rateCtx).Err()
+	rateCancel()
+	if rateErr != nil {
+		return fmt.Errorf("connect authentication rate-limit store: %w", rateErr)
+	}
+	authProtection, err := middleware.NewAuthProtection(middleware.NewRedisAuthRateStore(rateRedis), cfg.AuthTrustedProxyCIDRs)
+	if err != nil {
+		return err
+	}
 
 	// Initialize outbox & schedule dispatcher
 	dispatcher := outbox.NewDispatcher(outboxRepo, jobsClient).WithPostRepository(postsRepo)
@@ -186,7 +241,7 @@ func run(ctx context.Context) error {
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector, tiktokConnector}
-	router := api.NewRouter(oauthConnectors, socialAccountRepo, postsRepo, cfg.EncryptionKey, tiktokConnector, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, tokenManager, mediaHandler)
+	router := api.NewRouter(oauthConnectors, socialAccountRepo, postsRepo, cfg.EncryptionKey, tiktokConnector, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, tokenManager, authProtection, recoveryService, mediaHandler)
 
 	// Keep signed delivery URLs outside request-URI loggers and redirecting routers.
 	var httpHandler http.Handler = router
@@ -213,8 +268,10 @@ func run(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", cfg.Port)
 
 	server := &http.Server{
-		Addr:    addr,
-		Handler: httpHandler,
+		Addr:              addr,
+		Handler:           httpHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	serverErr := make(chan error, 1)

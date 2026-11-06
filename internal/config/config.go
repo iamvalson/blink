@@ -37,7 +37,9 @@ type Config struct {
 	PlatformMode string
 
 	// Frontend config
-	FrontendURL string
+	FrontendURL  string
+	ResendAPIKey string
+	EmailFrom    string
 
 	// Media Storage
 	MediaStorageDriver          string
@@ -59,8 +61,9 @@ type Config struct {
 	TikTokPollInterval     time.Duration
 	TikTokPollDeadline     time.Duration
 
-	// CORS Origins
-	CORSOrigins []string
+	// HTTP access policy
+	CORSOrigins           []string
+	AuthTrustedProxyCIDRs string
 }
 
 func Load() (*Config, error) {
@@ -90,6 +93,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
+		AuthTrustedProxyCIDRs:       getEnv("AUTH_TRUSTED_PROXY_CIDRS", ""),
 		JWTSigningKeyFile:           getEnv("JWT_SIGNING_KEY_FILE", "./.secrets/jwt-signing-key.pem"),
 		TikTokVerificationFile:      getEnv("TIKTOK_VERIFICATION_FILE", ""),
 		TikTokVerificationPath:      getEnv("TIKTOK_VERIFICATION_PATH", ""),
@@ -109,6 +113,8 @@ func Load() (*Config, error) {
 		ShutdownTimeout:             getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
 		EncryptionKey:               getEnv("ENCRYPTION_KEY", ""),
 		PlatformMode:                getEnv("PLATFORM_MODE", "real"),
+		ResendAPIKey:                getEnv("RESEND_API_KEY", ""),
+		EmailFrom:                   getEnv("EMAIL_FROM", ""),
 		FrontendURL:                 getEnv("FRONTEND_URL", "http://localhost:3000"),
 		MediaStorageDriver:          mediaDriver,
 		MediaStoragePath:            getEnv("MEDIA_STORAGE_PATH", "./media_uploads"),

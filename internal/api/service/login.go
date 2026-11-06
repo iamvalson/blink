@@ -68,7 +68,7 @@ func (l *LoginService) Login(
 	}
 
 	// Generate JWT
-	accessToken, err := l.jwt.CreateAccessToken(user.ID, input.RememberMe)
+	accessToken, err := l.jwt.CreateAccessTokenVersion(user.ID, input.RememberMe, user.SessionVersion)
 	if err != nil {
 		return nil, fmt.Errorf("create access token: %w", err)
 	}

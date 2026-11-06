@@ -36,30 +36,13 @@ export function usePost(id: string | null, enabled = true) {
     queryKey: postQueryKey(id ?? ""),
     queryFn: () => getPost(id!),
     enabled: enabled && id !== null,
-    // Fall back to polling only when SSE is unavailable (non-browser or proxy
-    // that drops EventSource connections).
-    refetchInterval: sseEnabled
-      ? false
-      : (query) => {
-          const data = query.state.data;
-          if (!data) return false;
-          const terminalStatuses = [
-            "PUBLISHED",
-            "PARTIALLY_PUBLISHED",
-            "FAILED",
-            "CANCELLED",
-          ];
-          if (terminalStatuses.includes(data.status)) return false;
-          const allTargetsTerminal =
-            !data.targets ||
-            data.targets.length === 0 ||
-            data.targets.every(
-              (t) => t.status === "PUBLISHED" || t.status === "FAILED",
-            );
-          if (allTargetsTerminal && terminalStatuses.includes(data.status))
-            return false;
-          return 3000;
-        },
+    // Keep active posts fresh even if an SSE connection drops or was closed
+    // before a manual retry. Scheduled posts need only a periodic refresh.
+    refetchInterval: (query) => {
+      const post = query.state.data;
+      if (!post || ["PUBLISHED", "PARTIALLY_PUBLISHED", "FAILED", "CANCELLED"].includes(post.status)) return false;
+      return post.status === "SCHEDULED" ? 30_000 : 5000;
+    },
     refetchIntervalInBackground: false,
   });
 }

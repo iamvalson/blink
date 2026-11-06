@@ -18,6 +18,7 @@ interface PublishingProgressProps {
   post: PostResponse;
   onRetry?: () => void;
   isRetrying?: boolean;
+  showDetailsLink?: boolean;
 }
 
 function PlatformIcon({ platform }: { platform: string }) {
@@ -148,6 +149,7 @@ export function PublishingProgress({
   post,
   onRetry,
   isRetrying,
+  showDetailsLink = true,
 }: PublishingProgressProps) {
   const isActive =
     post.status === "QUEUED" ||
@@ -275,6 +277,7 @@ export function PublishingProgress({
 
       {/* Actions */}
       <div className="flex flex-wrap gap-2">
+        {showDetailsLink && <Link href={`/posts/${post.id}`} className={buttonVariants({ size: "sm", variant: "outline", className: "text-xs h-7" })}>View details</Link>}
         {isFailed && onRetry && (
           <Button
             size="sm"

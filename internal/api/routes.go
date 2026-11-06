@@ -44,6 +44,8 @@ func NewRouter(
 	cookieSecure bool,
 	cookieSameSite http.SameSite,
 	tokenManager *service.TokenManagerService,
+	authProtection *middleware.AuthProtection,
+	recoveryService *service.PasswordRecoveryService,
 	mediaHandlers ...*handler.MediaHandler,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -53,17 +55,16 @@ func NewRouter(
 		AllowedOrigins:   corsOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"Link"},
+		ExposedHeaders:   []string{"Link", "Retry-After"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
 
 	// Middleware
-	r.Use(chiMiddleware.Logger)
-	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.RequestID)
-	r.Use(middleware.ErrorHandler)
 	r.Use(middleware.RequestLogger)
+	r.Use(chiMiddleware.Recoverer)
+	r.Use(middleware.ErrorHandler)
 
 	// Public routes
 	r.Get("/health", handler.HealthHandler)
@@ -74,8 +75,11 @@ func NewRouter(
 	loginHandler := handler.NewLoginHandler(loginService, secureCookie, cookieSecure, cookieSameSite)
 	meHandler := handler.NewMeHandler(meService)
 
-	r.Post("/auth/signup", signupHandler.Signup)
-	r.Post("/auth/login", loginHandler.Login)
+	r.With(authProtection.Signup).Post("/auth/signup", signupHandler.Signup)
+	r.With(authProtection.Login).Post("/auth/login", loginHandler.Login)
+	recoveryHandler := handler.NewPasswordRecoveryHandler(recoveryService, cookieSecure, cookieSameSite)
+	r.With(authProtection.ForgotPassword).Post("/auth/forgot-password", recoveryHandler.Forgot)
+	r.With(authProtection.ResetPassword).Post("/auth/reset-password", recoveryHandler.Reset)
 	r.Post("/auth/logout", handler.NewLogoutHandler(cookieSecure, cookieSameSite))
 	r.With(middleware.RequireAuth(jwtService)).Get("/auth/me", meHandler.Me)
 
@@ -148,6 +152,8 @@ func NewRouter(
 		r.With(middleware.RequireAuth(jwtService)).Post("/api/media/{id}/complete", mh.CompleteUpload)
 
 		r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/media/{id}", mh.GetMedia)
+		r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/media/{id}/content", mh.GetMediaContent)
+		r.With(middleware.RequireAuth(jwtService)).Get("/api/media/{id}/content", mh.GetMediaContent)
 		r.With(middleware.RequireAuth(jwtService)).Get("/api/media/{id}", mh.GetMedia)
 
 		r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/media/{id}", mh.DeleteMedia)

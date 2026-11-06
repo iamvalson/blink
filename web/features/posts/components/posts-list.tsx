@@ -1,7 +1,7 @@
 "use client";
 
 import { deletePost, retryPost } from "@/features/posts/api/create-post";
-import { usePosts, postsQueryKey } from "@/features/posts/hooks/use-posts";
+import { usePosts } from "@/features/posts/hooks/use-posts";
 import { usePostStatusStream } from "@/features/posts/hooks/use-post-status-stream";
 import type { ListPostsFilter, PostResponse } from "@/types/post";
 import {
@@ -82,6 +82,7 @@ const STATUS_FILTERS = [
   { value: "PUBLISHING", label: "Publishing" },
   { value: "PUBLISHED", label: "Published" },
   { value: "FAILED", label: "Failed" },
+  { value: "PARTIALLY_PUBLISHED", label: "Partially published" },
 ];
 
 const PLATFORM_FILTERS = [
@@ -132,7 +133,7 @@ function PostCard({
 
   const canDelete =
     post.status !== "QUEUED" && post.status !== "PUBLISHING" && post.status !== "PROCESSING";
-  const canRetry = post.status === "FAILED";
+  const canRetry = post.status === "FAILED" || post.status === "PARTIALLY_PUBLISHED";
   const canReschedule = post.status === "SCHEDULED" || post.status === "QUEUED";
 
   const handleDelete = async () => {
@@ -174,9 +175,9 @@ function PostCard({
       {/* Main content */}
       <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex flex-wrap items-start gap-2">
-          <p className="text-sm font-medium leading-snug line-clamp-2 flex-1">
+          <Link href={`/posts/${post.id}`} className="text-sm font-medium leading-snug line-clamp-2 flex-1 hover:underline">
             {caption}
-          </p>
+          </Link>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -362,8 +363,8 @@ function PostCardSkeleton() {
 
 // ─── Main posts list ──────────────────────────────────────────────────────────
 
-export function PostsList() {
-  const [filter, setFilter] = useState<ListPostsFilter>({ limit: 50 });
+export function PostsList({ initialStatus }: { initialStatus?: string }) {
+  const [filter, setFilter] = useState<ListPostsFilter>({ limit: 50, status: initialStatus });
   const queryClient = useQueryClient();
 
   // Primary fetch — also used as the SSE invalidation target.
@@ -379,7 +380,8 @@ export function PostsList() {
   usePosts(filter, hasInFlight ? 5000 : false);
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: postsQueryKey(filter) });
+    queryClient.invalidateQueries({ queryKey: ["posts"] });
+    queryClient.invalidateQueries({ queryKey: ["calendar"] });
   };
 
   return (
@@ -510,6 +512,7 @@ export function PostsList() {
         </div>
       )}
 
+      {filter.status === "FAILED" && <p className="text-xs text-muted-foreground">Includes posts that failed on every destination and partially published posts with a failed destination.</p>}
       {/* Post list */}
       {!isLoading && !isError && posts.length > 0 && (
         <div className="space-y-3">
