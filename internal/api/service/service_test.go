@@ -53,14 +53,16 @@ func TestSignupCreatesUserWithHashedPassword(t *testing.T) {
 		WithArgs("person@example.com").
 		WillReturnError(pgx.ErrNoRows)
 	db.ExpectQuery("INSERT INTO users").
-		WithArgs("person@example.com", "Person", hashedPasswordArgument{password: "strong-password"}).
+		WithArgs("person@example.com", "Person", hashedPasswordArgument{password: "strong-password"}, SignupLegalVersion).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("user-123"))
 
 	service := NewSignupService(users, jwtService)
 	result, err := service.Signup(context.Background(), SignupInput{
-		Email:       " PERSON@EXAMPLE.COM ",
-		DisplayName: " Person ",
-		Password:    "strong-password",
+		Email:        " PERSON@EXAMPLE.COM ",
+		DisplayName:  " Person ",
+		Password:     "strong-password",
+		AcceptTerms:  true,
+		LegalVersion: SignupLegalVersion,
 	})
 	if err != nil {
 		t.Fatalf("Signup failed: %v", err)
@@ -83,6 +85,22 @@ func TestSignupCreatesUserWithHashedPassword(t *testing.T) {
 	}
 }
 
+func TestSignupRejectsMissingOrStaleLegalAcceptance(t *testing.T) {
+	signup := NewSignupService(nil, nil)
+	for _, input := range []SignupInput{
+		{LegalVersion: SignupLegalVersion},
+		{AcceptTerms: true},
+		{AcceptTerms: true, LegalVersion: "old"},
+	} {
+		input.Email = "person@example.com"
+		input.DisplayName = "Person"
+		input.Password = "Original-password1!"
+		if _, err := signup.Signup(context.Background(), input); err != ErrLegalAcceptanceRequired {
+			t.Fatalf("expected legal acceptance error, got %v", err)
+		}
+	}
+}
+
 func TestSignupRejectsDuplicateEmail(t *testing.T) {
 	users, jwtService, db, cleanup := newServiceTestDependencies(t)
 	defer cleanup()
@@ -95,9 +113,11 @@ func TestSignupRejectsDuplicateEmail(t *testing.T) {
 
 	service := NewSignupService(users, jwtService)
 	_, err := service.Signup(context.Background(), SignupInput{
-		Email:       "person@example.com",
-		DisplayName: "Person",
-		Password:    "strong-password",
+		Email:        "person@example.com",
+		DisplayName:  "Person",
+		Password:     "strong-password",
+		AcceptTerms:  true,
+		LegalVersion: SignupLegalVersion,
 	})
 	if err != ErrEmailAlreadyExists {
 		t.Fatalf("expected ErrEmailAlreadyExists, got %v", err)

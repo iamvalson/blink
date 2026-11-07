@@ -166,7 +166,7 @@ function PostCard({
   };
 
   return (
-    <div className="flex items-start gap-4 rounded-lg border bg-card p-4 hover:bg-muted/30 transition-colors">
+    <div className="flex items-start gap-2 rounded-xl border bg-card p-3 hover:bg-muted/30 sm:gap-4 sm:p-4 transition-colors">
       {/* Platform icon */}
       <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-background">
         <PlatformIcon platform={platform} />
@@ -175,7 +175,7 @@ function PostCard({
       {/* Main content */}
       <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex flex-wrap items-start gap-2">
-          <Link href={`/posts/${post.id}`} className="text-sm font-medium leading-snug line-clamp-2 flex-1 hover:underline">
+          <Link href={`/posts/${post.id}`} className="text-sm font-medium leading-snug line-clamp-2 min-w-0 flex-1 wrap-anywhere hover:underline">
             {caption}
           </Link>
         </div>
@@ -230,14 +230,14 @@ function PostCard({
               type="button"
               size="sm"
               variant="outline"
-              className="h-7 text-xs border-amber-500/30 hover:bg-amber-500/10 text-amber-900 dark:text-amber-200"
+              className="min-h-11 text-xs lg:min-h-0 border-amber-500/30 hover:bg-amber-500/10 text-amber-900 dark:text-amber-200"
               onClick={handleReconnect}
             >
               Reconnect {reconnectPlatform === "twitter" ? "X" : reconnectPlatform}
             </Button>
           </div>
         ) : failedTarget?.error_message ? (
-          <p className="text-xs text-red-600 line-clamp-2">
+          <p className="line-clamp-2 wrap-anywhere text-xs text-red-600">
             {failedTarget.error_message}
           </p>
         ) : null}
@@ -259,7 +259,7 @@ function PostCard({
             href={platformUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            className="hidden size-8 items-center justify-center rounded-md lg:flex text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
             aria-label="View on platform"
           >
             <ExternalLink className="h-4 w-4" />
@@ -268,7 +268,7 @@ function PostCard({
 
         <DropdownMenu>
           <DropdownMenuTrigger
-            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:size-8"
             aria-label="Post actions"
           >
             <MoreHorizontal className="h-4 w-4" />
@@ -387,12 +387,14 @@ export function PostsList({ initialStatus }: { initialStatus?: string }) {
   return (
     <div className="space-y-6">
       {/* Filters */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
         {/* Status tabs */}
-        <div className="flex flex-wrap gap-1">
+        <div className="mobile-status-filters flex gap-2 overflow-x-auto p-0.5 pb-2 lg:flex-wrap lg:overflow-visible lg:pb-0" role="group" aria-label="Filter by status">
           {STATUS_FILTERS.map((f) => (
             <button
               key={f.value}
+              type="button"
+              aria-pressed={(filter.status ?? "") === f.value}
               onClick={() =>
                 setFilter((prev) => ({
                   ...prev,
@@ -401,10 +403,10 @@ export function PostsList({ initialStatus }: { initialStatus?: string }) {
                 }))
               }
               className={[
-                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                "min-h-11 shrink-0 whitespace-nowrap rounded-full px-3.5 text-sm font-medium transition-colors lg:min-h-8 lg:text-xs",
                 (filter.status ?? "") === f.value
                   ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  : "bg-muted text-muted-foreground hover:text-foreground",
               ].join(" ")}
             >
               {f.label}
@@ -413,7 +415,7 @@ export function PostsList({ initialStatus }: { initialStatus?: string }) {
         </div>
 
         {/* Platform filter */}
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:flex">
           <select
             value={filter.platform ?? ""}
             onChange={(e) =>
@@ -423,7 +425,7 @@ export function PostsList({ initialStatus }: { initialStatus?: string }) {
                 offset: 0,
               }))
             }
-            className="rounded-md border bg-background px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            className="h-11 min-w-0 max-w-full rounded-lg border bg-background px-2.5 text-base text-foreground lg:h-8 lg:text-xs focus:outline-none focus:ring-2 focus:ring-ring"
             aria-label="Filter by platform"
           >
             {PLATFORM_FILTERS.map((f) => (
@@ -445,7 +447,7 @@ export function PostsList({ initialStatus }: { initialStatus?: string }) {
                 offset: 0,
               }))
             }
-            className="w-40 rounded-md border bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:w-48"
+            className="h-11 w-full min-w-0 rounded-lg border bg-background px-2.5 text-base text-foreground lg:h-8 lg:text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:w-48"
             aria-label="Search posts"
           />
         </div>
@@ -469,7 +471,7 @@ export function PostsList({ initialStatus }: { initialStatus?: string }) {
 
       {/* Error state */}
       {isError && (
-        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-12 text-center">
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed px-4 py-10 text-center sm:p-12">
           <AlertCircle className="h-8 w-8 text-muted-foreground" />
           <div>
             <p className="font-medium">Could not load posts</p>
@@ -486,7 +488,7 @@ export function PostsList({ initialStatus }: { initialStatus?: string }) {
 
       {/* Empty state */}
       {!isLoading && !isError && posts.length === 0 && (
-        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-12 text-center">
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed px-4 py-10 text-center sm:p-12">
           <FileText className="h-8 w-8 text-muted-foreground" />
           <div>
             {filter.status || filter.platform || filter.search ? (

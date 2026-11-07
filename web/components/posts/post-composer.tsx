@@ -9,7 +9,7 @@ import { createPost, retryPost } from "@/features/posts/api/create-post";
 import { usePost } from "@/features/posts/hooks/use-posts";
 import { deleteMedia, uploadMedia } from "@/features/posts/api/upload-media";
 import type { ContentFormat, PostResponse } from "@/types/post";
-import { CalendarClock, RefreshCcw, Send } from "lucide-react";
+import { CalendarClock, Eye, Pencil, RefreshCcw, Send } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -64,6 +64,7 @@ export function PostComposer() {
     [data?.accounts],
   );
 
+  const [composerView, setComposerView] = useState<"write" | "preview">("write");
   const [caption, setCaption] = useState("");
   const [tikTokAccount, setTikTokAccount] = useState("");
   const [tikTokChoices, setTikTokChoices] = useState<Record<string,TikTokOptions>>({});
@@ -617,9 +618,31 @@ export function PostComposer() {
 
   return (
     <>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <Card className="overflow-hidden">
-          <CardContent className="space-y-6 p-6">
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-muted p-1 xl:hidden" role="group" aria-label="Composer view">
+        <button
+          type="button"
+          aria-controls="composer-write"
+          aria-pressed={composerView === "write"}
+          onClick={() => setComposerView("write")}
+          className="flex min-h-11 items-center justify-center gap-2 rounded-lg text-sm font-medium text-muted-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm focus-visible:outline-2"
+        >
+          <Pencil className="size-4" aria-hidden="true" />
+          Write
+        </button>
+        <button
+          type="button"
+          aria-controls="composer-preview"
+          aria-pressed={composerView === "preview"}
+          onClick={() => setComposerView("preview")}
+          className="flex min-h-11 items-center justify-center gap-2 rounded-lg text-sm font-medium text-muted-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm focus-visible:outline-2"
+        >
+          <Eye className="size-4" aria-hidden="true" />
+          Preview
+        </button>
+      </div>
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,380px)]">
+        <Card id="composer-write" className={composerView === "preview" ? "hidden min-w-0 overflow-hidden xl:flex" : "min-w-0 overflow-hidden"}>
+          <CardContent className="space-y-6 p-4 sm:p-6">
             <div>
               <h2 className="text-sm font-medium">Publish to</h2>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -654,7 +677,7 @@ export function PostComposer() {
 
             {isTikTokSelected && <>
               <label className="block text-sm font-medium">TikTok account
-                <select value={tikTokAccountID} onChange={e=>setTikTokAccount(e.target.value)} disabled={isDisabled} className="mt-1 block w-full rounded border bg-background p-2">
+                <select value={tikTokAccountID} onChange={e=>setTikTokAccount(e.target.value)} disabled={isDisabled} className="mt-1 block min-h-11 w-full min-w-0 rounded border bg-background p-2 text-base sm:text-sm">
                   {tikTokAccounts.map(a=><option key={a.id} value={a.id}>{a.platform_user_id}</option>)}
                 </select>
               </label>
@@ -675,7 +698,7 @@ export function PostComposer() {
             <Separator />
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <label htmlFor="post-caption" className="text-sm font-medium">
                   {isYouTubeSelected ? "Title / Caption" : "Caption"}
                 </label>
@@ -699,7 +722,7 @@ export function PostComposer() {
                 maxLength={characterLimit}
                 rows={9}
                 disabled={isDisabled}
-                className="w-full resize-none rounded-lg border bg-background px-4 py-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full resize-none rounded-lg border bg-background px-3 py-3 text-base outline-none sm:px-4 sm:text-sm transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </div>
 
@@ -764,27 +787,25 @@ export function PostComposer() {
             )}
           </CardContent>
 
-          <CardFooter className="flex flex-col gap-3 border-t bg-muted/30 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex gap-2">
-              {(phase === "published" || phase === "failed" || phase === "partial" || phase === "scheduled") && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={handleReset}
-                  className="w-full sm:w-auto"
-                >
-                  <RefreshCcw className="mr-2 h-4 w-4" />
-                  New post
-                </Button>
-              )}
-            </div>
+          <CardFooter className="flex flex-wrap gap-3 border-t bg-muted/30 px-4 py-4 sm:px-6">
+            {(phase === "published" || phase === "failed" || phase === "partial" || phase === "scheduled") && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handleReset}
+                className="min-h-11 w-full sm:w-auto"
+              >
+                <RefreshCcw className="mr-2 h-4 w-4" />
+                New post
+              </Button>
+            )}
 
-            <div className="flex w-full gap-2 sm:w-auto">
+            <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setScheduleOpen(true)}
-                className="flex-1 sm:flex-none"
+                className="min-h-11 flex-1 sm:flex-none"
                 disabled={isDisabled || Boolean(tikTokError)}
               >
                 <CalendarClock className="mr-2 h-4 w-4" />
@@ -803,7 +824,7 @@ export function PostComposer() {
                   charactersRemaining < 0 ||
                   connectedAccounts.length === 0
                 }
-                className="flex-1 sm:flex-none"
+                className="min-h-11 flex-1 sm:flex-none"
               >
                 <Send className="mr-2 h-4 w-4" />
                 {publishButtonLabel}
@@ -812,7 +833,7 @@ export function PostComposer() {
           </CardFooter>
         </Card>
 
-        <div className="lg:sticky lg:top-6 lg:self-start">
+        <div id="composer-preview" className={composerView === "write" ? "hidden min-w-0 xl:sticky xl:top-20 xl:block" : "min-w-0 xl:sticky xl:top-20"}>
           <PostPreview
             caption={caption}
             media={media}

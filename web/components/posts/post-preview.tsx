@@ -82,7 +82,7 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
           </p>
         </div>
       </CardHeader>
-      <CardContent className="p-5">
+      <CardContent className="p-3 sm:p-5">
         <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <div className="flex min-w-0 items-center gap-3">
@@ -97,14 +97,14 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
             <MoreHorizontal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           </div>
           <div className="space-y-4 p-4">
-            {title && title !== caption.split("\n")[0]?.trim() && <h3 className="break-words font-semibold">{title}</h3>}
+            {title && title !== caption.split("\n")[0]?.trim() && <h3 className="wrap-anywhere font-semibold">{title}</h3>}
             {(caption || !saved) && (
-              <p className="whitespace-pre-wrap break-words text-sm leading-6">
+              <p className="whitespace-pre-wrap wrap-anywhere text-sm leading-6">
                 {caption || <span className="text-muted-foreground">Your post caption will appear here...</span>}
               </p>
             )}
             {media.length > 0 ? (
-              <div className="grid gap-2 overflow-hidden rounded-lg">
+              <div className="grid grid-cols-1 gap-2 overflow-hidden rounded-lg">
                 {media.slice(0, 4).map(item => <MediaPreview key={`${item.id}:${item.previewUrl}`} item={item} />)}
               </div>
             ) : !saved ? (
@@ -116,7 +116,7 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
                 ) : <ImageIcon className="size-6 text-muted-foreground" />}
               </div>
             ) : !caption && !title ? <p className="text-sm text-muted-foreground">No content is available for this post.</p> : null}
-            <div className="flex items-center justify-between gap-3 border-t pt-3 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
               <span>{date ? new Date(date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : saved ? "Saved post" : "Now"}</span>
               <span>{saved ? platformName : `Post on ${platformName}`}</span>
             </div>

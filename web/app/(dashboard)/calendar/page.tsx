@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { calendarQueryKey, upcomingQueryKey } from "@/features/posts/hooks/use-posts";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DropdownMenu,
@@ -108,7 +108,7 @@ function UpcomingPostItem({
       </div>
 
       <div className="min-w-0 flex-1">
-        <Link href={`/posts/${post.id}`} className="block truncate text-sm font-medium leading-snug hover:underline">
+        <Link href={`/posts/${post.id}`} className="block line-clamp-2 wrap-anywhere text-sm font-medium leading-snug hover:underline">
           {post.caption ?? post.title ?? "(no caption)"}
         </Link>
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -117,7 +117,7 @@ function UpcomingPostItem({
               {scheduledAt.toLocaleTimeString(undefined, { timeStyle: "short" })}
             </span>
           )}
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {platforms.map((p) => (
               <PlatformBadge key={p} platform={p} />
             ))}
@@ -129,7 +129,7 @@ function UpcomingPostItem({
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Post options"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded transition-opacity hover:bg-muted sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
+          className="flex size-11 shrink-0 items-center justify-center rounded hover:bg-muted lg:size-8"
         >
           <MoreHorizontal className="h-4 w-4" />
         </DropdownMenuTrigger>
@@ -179,7 +179,7 @@ function CalendarCell({
   return (
     <div
       className={[
-        "relative flex min-h-[90px] flex-col rounded-lg p-2 text-sm transition-colors",
+        "relative flex min-w-0 min-h-[90px] flex-col rounded-lg p-2 text-sm transition-colors",
         isCurrentMonth ? "bg-card" : "bg-muted/20",
         isToday ? "ring-2 ring-primary ring-offset-1" : "border",
       ].join(" ")}
@@ -215,7 +215,7 @@ function CalendarCell({
                   : "bg-muted text-muted-foreground",
               ].join(" ")}
             >
-              <span className="flex gap-0.5 text-[9px] uppercase tracking-tight">
+              <span className="max-w-[45%] shrink-0 truncate text-[9px] uppercase tracking-tight">
                 {platforms.join("/")}
               </span>
               <span className="truncate">
@@ -246,7 +246,7 @@ export default function CalendarPage() {
   const rangeFrom = useMemo(() => startOfMonth(viewYear, viewMonth), [viewYear, viewMonth]);
   const rangeTo = useMemo(() => endOfMonth(viewYear, viewMonth), [viewYear, viewMonth]);
 
-  const { data: calendarPosts = [], isLoading: isCalendarLoading } =
+  const { data: calendarPosts = [], isLoading: isCalendarLoading, isError: isCalendarError, refetch } =
     useCalendarPosts(rangeFrom, rangeTo);
 
   const { data: upcomingData, isLoading: isUpcomingLoading } =
@@ -305,7 +305,7 @@ export default function CalendarPage() {
   const upcomingPosts = upcomingData?.posts ?? [];
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       {reschedulingPost && (
         <ReschedulePostDialog
           key={reschedulingPost.id}
@@ -314,35 +314,34 @@ export default function CalendarPage() {
         />
       )}
       {/* Header */}
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4 sm:items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Content Calendar</h1>
           <p className="text-sm text-muted-foreground">
             View and manage your scheduled posts.
           </p>
         </div>
-        <Button>
-          <Link href="/posts/new" className="flex items-center gap-2">
-            <CalendarDays className="h-4 w-4" />
-            New post
-          </Link>
-        </Button>
+        <Link href="/posts/new" className={buttonVariants({ className: "hidden lg:inline-flex" })}>
+          <CalendarDays className="size-4" />
+          New post
+        </Link>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
+      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-[minmax(0,1fr)_320px]">
         {/* Calendar */}
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <CardHeader className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3 sm:px-6">
             <CardTitle className="text-lg font-semibold">
               {MONTH_NAMES[viewMonth]} {viewYear}
             </CardTitle>
             <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon" onClick={prevMonth} aria-label="Previous month">
+              <Button variant="ghost" size="icon" className="size-11 xl:size-8" onClick={prevMonth} aria-label="Previous month">
                 <ChevronLeft className="h-4 w-4" />
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
+                className="min-h-11 xl:min-h-0"
                 onClick={() => {
                   setViewYear(today.getFullYear());
                   setViewMonth(today.getMonth());
@@ -350,52 +349,98 @@ export default function CalendarPage() {
               >
                 Today
               </Button>
-              <Button variant="ghost" size="icon" onClick={nextMonth} aria-label="Next month">
+              <Button variant="ghost" size="icon" className="size-11 xl:size-8" onClick={nextMonth} aria-label="Next month">
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
-            {/* Day headers */}
-            <div className="mb-2 grid grid-cols-7 gap-1 text-center">
-              {DAY_NAMES.map((d) => (
-                <div key={d} className="py-1 text-xs font-medium text-muted-foreground">
-                  {d}
+          {isCalendarError ? (
+            <CardContent className="space-y-3 px-4 sm:px-6" role="alert">
+              <p className="text-sm text-muted-foreground">Could not load this month.</p>
+              <Button variant="outline" onClick={() => refetch()}>Try again</Button>
+            </CardContent>
+          ) : (
+            <CardContent className="space-y-4 px-4 sm:px-6 xl:hidden">
+              {isCalendarLoading ? (
+                <p role="status" className="text-sm text-muted-foreground">Loading calendar…</p>
+              ) : Object.keys(postsByDay).length === 0 ? (
+                <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
+                  No posts on the calendar this month.
+                </p>
+              ) : (
+                Object.entries(postsByDay).map(([day, posts]) => (
+                  <div key={day}>
+                    <h3 className="mb-2 text-sm font-semibold">
+                      {new Date(viewYear, viewMonth, Number(day)).toLocaleDateString(undefined, {
+                        weekday: "long",
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </h3>
+                    <ul className="divide-y rounded-lg border">
+                      {posts.map((post) => (
+                        <li key={post.id}>
+                          <Link href={"/posts/" + post.id} className="block rounded-lg p-3 hover:bg-muted/50 focus-visible:outline-2">
+                            <p className="line-clamp-2 wrap-anywhere text-sm font-medium">
+                              {post.caption ?? post.title ?? "Untitled post"}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <span>{new Date(post.scheduled_at ?? post.created_at).toLocaleTimeString(undefined, { timeStyle: "short" })}</span>
+                              <StatusBadge status={post.status} />
+                            </div>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          )}
+
+          {!isCalendarError && (
+            <CardContent className="hidden xl:block">
+              {/* Day headers */}
+              <div className="mb-2 grid grid-cols-7 gap-1 text-center">
+                {DAY_NAMES.map((d) => (
+                  <div key={d} className="py-1 text-xs font-medium text-muted-foreground">
+                    {d}
+                  </div>
+                ))}
+              </div>
+
+              {/* Calendar grid */}
+              {isCalendarLoading ? (
+                <div className="grid grid-cols-7 gap-1">
+                  {Array.from({ length: 35 }).map((_, i) => (
+                    <LoadingSkeleton key={i} className="h-[90px]" />
+                  ))}
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="grid grid-cols-7 gap-1">
+                  {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                    <div key={`empty-start-${i}`} className="min-h-[90px]" />
+                  ))}
 
-            {/* Calendar grid */}
-            {isCalendarLoading ? (
-              <div className="grid grid-cols-7 gap-1">
-                {Array.from({ length: 35 }).map((_, i) => (
-                  <LoadingSkeleton key={i} className="h-[90px]" />
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-7 gap-1">
-                {Array.from({ length: firstDayOfWeek }).map((_, i) => (
-                  <div key={`empty-start-${i}`} className="min-h-[90px]" />
-                ))}
-
-                {Array.from({ length: totalDays }).map((_, i) => {
-                  const day = i + 1;
-                  const cellDate = new Date(viewYear, viewMonth, day);
-                  return (
-                    <CalendarCell
-                      key={day}
-                      day={day}
-                      year={viewYear}
-                      month={viewMonth}
-                      posts={postsByDay[day] ?? []}
-                      isToday={isSameDay(cellDate, today)}
-                      isCurrentMonth={true}
-                    />
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
+                  {Array.from({ length: totalDays }).map((_, i) => {
+                    const day = i + 1;
+                    const cellDate = new Date(viewYear, viewMonth, day);
+                    return (
+                      <CalendarCell
+                        key={day}
+                        day={day}
+                        year={viewYear}
+                        month={viewMonth}
+                        posts={postsByDay[day] ?? []}
+                        isToday={isSameDay(cellDate, today)}
+                        isCurrentMonth={true}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          )}
         </Card>
 
         {/* Upcoming sidebar */}

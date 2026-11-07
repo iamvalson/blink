@@ -53,9 +53,9 @@ export function AccountCard({
 
   return (
     <Card className={account?.reconnect_required ? "border-amber-500/50" : undefined}>
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-lg border">
+      <CardHeader className="flex flex-row items-start justify-between gap-2 px-4 sm:px-6">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border">
             <PlatformIcon platform={platform.id} size={20} />
           </div>
 
@@ -70,7 +70,7 @@ export function AccountCard({
 
         {account && (
           <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-9 w-9 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+            <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground size-11 shrink-0 lg:size-9 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
               <MoreHorizontal className="size-4" />
               <span className="sr-only">Account options</span>
             </DropdownMenuTrigger>
@@ -92,7 +92,7 @@ export function AccountCard({
         )}
       </CardHeader>
 
-      <CardContent className="flex items-center justify-between gap-4">
+      <CardContent className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 [&_button]:min-h-11 lg:[&_button]:min-h-0">
         <div>
           <AccountStatus account={account} isLoading={isLoading} />
         </div>

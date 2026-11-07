@@ -8,6 +8,8 @@ export interface SignupInput {
   email: string;
   display_name: string;
   password: string;
+  accept_terms: boolean;
+  legal_version: string;
 }
 
 export interface SignupResponse {

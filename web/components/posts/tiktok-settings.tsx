@@ -11,12 +11,12 @@ interface Props {
 }
 export function TikTokSettings({ creator, options, onChange, disabled, loading, error, onRefresh }: Props) {
  const change = (patch: Partial<TikTokOptions>) => onChange({ ...options, consent: false, ...patch });
- return <fieldset disabled={disabled} className="space-y-4 rounded-lg border p-4 text-sm">
+ return <fieldset disabled={disabled} className="min-w-0 space-y-4 rounded-lg border p-3 text-sm wrap-anywhere sm:p-4">
   <legend className="px-1 font-medium">TikTok publishing settings</legend>
   {loading ? <p role="status">Loading TikTok creator settings…</p> : creator ? <p>Publishing to <strong>{creator.creator_nickname}</strong> (@{creator.creator_username}). Maximum video length: {creator.max_video_post_duration_sec} seconds.</p> : <p role="alert">Creator settings could not be loaded.</p>}
   <button type="button" onClick={onRefresh} disabled={loading} className="text-primary underline">Refresh creator settings</button>
   <label className="block space-y-1">Privacy
-   <select aria-label="TikTok privacy" value={options.privacy_level} onChange={e => change({privacy_level:e.target.value})} className="block w-full rounded border bg-background p-2">
+   <select aria-label="TikTok privacy" value={options.privacy_level} onChange={e => change({privacy_level:e.target.value})} className="block min-h-11 w-full min-w-0 rounded border bg-background p-2 text-base sm:text-sm">
     <option value="" disabled>Select privacy</option>
     {creator?.privacy_level_options.map(level => <option key={level} value={level} disabled={!["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS"].includes(level) && options.brand_content_toggle}>{({PUBLIC_TO_EVERYONE:"Everyone",MUTUAL_FOLLOW_FRIENDS:"Friends",FOLLOWER_OF_CREATOR:"Followers",SELF_ONLY:"Only me"} as Record<string,string>)[level] ?? level}</option>)}
    </select>

@@ -41,7 +41,7 @@ export function UserMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="size-9 rounded-full p-0"
+        className="flex size-11 items-center justify-center rounded-full p-0 lg:size-9"
         aria-label="Open user menu"
       >
         <span className="flex size-8 items-center justify-center rounded-full bg-muted text-xs font-medium">
@@ -57,15 +57,20 @@ export function UserMenu() {
 
         <DropdownMenuSeparator />
 
-        <DropdownMenuItem onClick={() => router.push("/account")}>
+        <DropdownMenuItem onClick={() => router.push("/accounts")}>
           <User className="mr-2 size-4" />
-          Account
+          Accounts
         </DropdownMenuItem>
 
         <DropdownMenuItem onClick={() => router.push("/settings")}>
           <Settings className="mr-2 size-4" />
           Settings
         </DropdownMenuItem>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem onClick={() => router.push("/terms")}>Terms of Service</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => router.push("/privacy")}>Privacy Policy</DropdownMenuItem>
 
         <DropdownMenuSeparator />
 

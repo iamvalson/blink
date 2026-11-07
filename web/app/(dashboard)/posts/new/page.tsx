@@ -2,8 +2,8 @@ import { PostComposer } from "@/components/posts/post-composer";
 
 export default function NewPostPage() {
   return (
-    <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mb-8">
+    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mb-5 sm:mb-8">
         <div className="flex items-center gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
@@ -18,6 +18,6 @@ export default function NewPostPage() {
       </div>
 
       <PostComposer />
-    </main>
+    </div>
   );
 }

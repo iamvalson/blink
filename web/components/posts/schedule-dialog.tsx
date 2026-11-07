@@ -89,7 +89,7 @@ export function ScheduleDialog({
               value={date}
               onChange={(e) => setDate(e.target.value)}
               min={minDateTime}
-              className="w-full"
+              className="h-11 w-full min-w-0 text-base sm:h-9 sm:text-sm"
               disabled={isSubmitting}
             />
           </div>
