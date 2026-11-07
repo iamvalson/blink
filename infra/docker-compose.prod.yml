@@ -1,0 +1,124 @@
+name: blink-prod
+
+x-app: &app
+  env_file: ../.env.production.local
+  environment: &app-environment
+    ENV: production
+    DATABASE_URL: &database-url postgres://blink:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production.local}@postgres:5432/blink_db?sslmode=disable
+    REDIS_URL: redis://redis:6379
+    MEDIA_STORAGE_DRIVER: r2
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  networks: [default, data]
+  restart: unless-stopped
+  stop_grace_period: 45s
+  logging:
+    driver: local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: blink
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production.local}
+      POSTGRES_DB: blink_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [data]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, blink, -d, blink_db]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging:
+      driver: local
+
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging:
+      driver: local
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: migrate
+    command: [up]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+    logging:
+      driver: local
+
+  api:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: api
+    environment:
+      <<: *app-environment
+      PORT: "8080"
+      JWT_SIGNING_KEY_FILE: /var/lib/blink/jwt-signing-key.pem
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - type: bind
+        source: ../.secrets/jwt-signing-key.pem
+        target: /var/lib/blink/jwt-signing-key.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./tiktok-verification
+        target: /var/lib/blink/tiktok-verification
+        read_only: true
+        bind:
+          create_host_path: false
+
+  worker:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: worker
+
+  keygen:
+    profiles: [setup]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: keygen
+    command: [-out, /var/lib/blink/jwt-signing-key.pem]
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ../.secrets
+        target: /var/lib/blink
+        bind:
+          create_host_path: false
+
+networks:
+  data:
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
