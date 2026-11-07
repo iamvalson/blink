@@ -21,6 +21,9 @@ export const signupSchema = z
       ),
 
     confirm_password: z.string(),
+    accept_terms: z.boolean().refine((accepted) => accepted, {
+      message: "Accept the Terms of Service and acknowledge the Privacy Policy to continue.",
+    }),
   })
   .refine((data) => data.password === data.confirm_password, {
     message: "Passwords do not match",

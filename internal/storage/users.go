@@ -36,20 +36,23 @@ func NewUserRepository(db userDB) *UserRepository {
 func (r *UserRepository) Create(
 	ctx context.Context,
 	user User,
+	legalVersion string,
 ) (string, error) {
 	const query = `
 		INSERT INTO users(
 			email,
 			display_name,
-			password_hash
+			password_hash,
+			legal_version,
+			legal_accepted_at
 		)
-		VALUES ($1, $2, $3)
+		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
 		RETURNING id
 	`
 
 	var userID string
 
-	err := r.db.QueryRow(ctx, query, user.Email, user.DisplayName, user.PasswordHash).Scan(&userID)
+	err := r.db.QueryRow(ctx, query, user.Email, user.DisplayName, user.PasswordHash, legalVersion).Scan(&userID)
 
 	if err != nil {
 		return "", fmt.Errorf("create user: %w", err)

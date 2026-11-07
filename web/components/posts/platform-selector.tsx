@@ -59,8 +59,9 @@ export function PlatformSelector({
             variant="outline"
             onClick={() => onToggle(platform.id)}
             disabled={!connected}
+            aria-pressed={selected}
             className={cn(
-              "relative h-auto justify-start gap-3 px-4 py-3 text-left",
+              "relative h-auto min-w-0 justify-start gap-3 whitespace-normal px-3 py-3 text-left sm:px-4",
               selected && "border-primary bg-primary/5",
               !connected && "cursor-not-allowed opacity-50",
             )}
@@ -85,7 +86,7 @@ export function PlatformSelector({
 
             <div
               className={cn(
-                "flex h-5 w-5 items-center justify-center rounded-full border",
+                "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
                 selected && "border-primary bg-primary text-primary-foreground",
               )}
             >

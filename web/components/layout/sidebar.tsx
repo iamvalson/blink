@@ -73,7 +73,7 @@ export function Sidebar() {
   const initials = user ? getInitials(user.display_name) : "";
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 hidden h-screen w-60 shrink-0 border-r bg-background px-2.75 py-3.5 md:flex md:flex-col">
+    <aside className="fixed inset-y-0 left-0 z-40 hidden h-screen w-60 shrink-0 border-r bg-background px-2.75 py-3.5 lg:flex lg:flex-col">
       <div className="flex h-14 items-center px-5">
         <Link href="/" className="text-lg font-semibold tracking-tight">
           Blink

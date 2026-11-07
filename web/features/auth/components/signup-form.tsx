@@ -10,6 +10,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SIGNUP_LEGAL_VERSION } from "@/lib/signup-legal-version";
 
 import { useAuth } from "../hooks/use-auth";
 import { signupSchema, type SignupFormValues } from "../schemas/signup";
@@ -28,6 +29,7 @@ export function SignupForm() {
       display_name: "",
       password: "",
       confirm_password: "",
+      accept_terms: false,
     },
   });
 
@@ -68,6 +70,8 @@ export function SignupForm() {
       email: values.email,
       display_name: values.display_name,
       password: values.password,
+      accept_terms: values.accept_terms,
+      legal_version: SIGNUP_LEGAL_VERSION,
     };
 
     signup.mutate(signupData, {
@@ -236,6 +240,35 @@ export function SignupForm() {
           {form.formState.errors.confirm_password && (
             <p className="text-sm text-destructive">
               {form.formState.errors.confirm_password.message}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-lg border bg-muted/40 p-3">
+          <div className="flex items-start gap-3">
+            <input
+              id="accept_terms"
+              type="checkbox"
+              className="mt-0.5 size-5 shrink-0 accent-primary"
+              aria-required="true"
+              aria-invalid={Boolean(form.formState.errors.accept_terms)}
+              aria-describedby={form.formState.errors.accept_terms ? "signup-legal-error" : undefined}
+              {...form.register("accept_terms")}
+            />
+            <label htmlFor="accept_terms" className="min-h-11 text-sm leading-6">
+              I agree to the{" "}
+              <Link href="/terms" target="_blank" rel="noopener noreferrer" className="font-medium underline underline-offset-2">
+                Terms of Service
+              </Link>{" "}
+              and acknowledge the{" "}
+              <Link href="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium underline underline-offset-2">
+                Privacy Policy
+              </Link>.
+            </label>
+          </div>
+          {form.formState.errors.accept_terms && (
+            <p id="signup-legal-error" role="alert" className="mt-2 text-sm text-destructive">
+              {form.formState.errors.accept_terms.message}
             </p>
           )}
         </div>

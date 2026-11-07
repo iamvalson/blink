@@ -10,8 +10,12 @@ import (
 	"github.com/iamvalson/blink/internal/storage"
 )
 
+// SignupLegalVersion identifies the terms and privacy notice shown together.
+const SignupLegalVersion = "1.0"
+
 var (
-	ErrEmailAlreadyExists = errors.New("email already exists")
+	ErrEmailAlreadyExists      = errors.New("email already exists")
+	ErrLegalAcceptanceRequired = errors.New("accept the current Terms of Service and acknowledge the Privacy Policy to create an account")
 )
 
 type SignupService struct {
@@ -30,9 +34,11 @@ func NewSignupService(
 }
 
 type SignupInput struct {
-	Email       string
-	DisplayName string
-	Password    string
+	Email        string
+	DisplayName  string
+	Password     string
+	AcceptTerms  bool
+	LegalVersion string
 }
 
 type SignupResult struct {
@@ -44,6 +50,10 @@ func (s *SignupService) Signup(
 	ctx context.Context,
 	input SignupInput,
 ) (*SignupResult, error) {
+	if !input.AcceptTerms || input.LegalVersion != SignupLegalVersion {
+		return nil, ErrLegalAcceptanceRequired
+	}
+
 	email := strings.ToLower(strings.TrimSpace(input.Email))
 	displayName := strings.TrimSpace(input.DisplayName)
 
@@ -81,7 +91,7 @@ func (s *SignupService) Signup(
 		PasswordHash: passwordHash,
 	}
 
-	userID, err := s.users.Create(ctx, user)
+	userID, err := s.users.Create(ctx, user, input.LegalVersion)
 	if err != nil {
 		if errors.Is(err, storage.ErrUserAlreadyExists) {
 			return nil, ErrEmailAlreadyExists

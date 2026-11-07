@@ -124,7 +124,7 @@ export function MediaUploader({ media, onChange, onUpload, onRemove, disabled, a
                   type="button"
                   onClick={() => removeFile(item.id)}
                   disabled={isUploading}
-                  className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-0"
+                  className="absolute right-2 top-2 flex size-11 items-center justify-center rounded-full bg-black/70 text-white transition-opacity disabled:opacity-0 [@media(hover:hover)_and_(pointer:fine)]:size-8 [@media(hover:hover)_and_(pointer:fine)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                   aria-label={`Remove ${item.file.name}`}
                 >
                   <Trash2 className="h-4 w-4" />

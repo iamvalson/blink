@@ -81,12 +81,49 @@ func recoveryRequest(router http.Handler, path string, payload any, cookie *http
 }
 func registerRecoveryUser(t *testing.T, router http.Handler) *http.Cookie {
 	t.Helper()
-	rec := recoveryRequest(router, "/auth/signup", map[string]any{"email": "user@example.com", "display_name": "Tester", "password": "Original-password1!"}, nil)
+	rec := recoveryRequest(router, "/auth/signup", map[string]any{"email": "user@example.com", "display_name": "Tester", "password": "Original-password1!", "accept_terms": true, "legal_version": service.SignupLegalVersion}, nil)
 	if rec.Code != 201 {
 		t.Fatalf("signup: %d %s", rec.Code, rec.Body.String())
 	}
 	return rec.Result().Cookies()[0]
 }
+func TestSignupRequiresAndRecordsCurrentLegalAcceptance(t *testing.T) {
+	db, _, _, router := recoveryFixture(t)
+	payload := map[string]any{
+		"email": "legal@example.com", "display_name": "Tester", "password": "Original-password1!",
+	}
+
+	for _, acceptance := range []map[string]any{
+		nil,
+		{"accept_terms": false, "legal_version": service.SignupLegalVersion},
+		{"accept_terms": true, "legal_version": "old"},
+	} {
+		for key, value := range acceptance {
+			payload[key] = value
+		}
+		rec := recoveryRequest(router, "/auth/signup", payload, nil)
+		if rec.Code != http.StatusBadRequest || len(rec.Result().Cookies()) != 0 {
+			t.Fatalf("signup without current agreement: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	payload["legal_version"] = service.SignupLegalVersion
+	rec := recoveryRequest(router, "/auth/signup", payload, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("signup with current agreement: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var version string
+	var acceptedAt time.Time
+	query := "SELECT legal_version, legal_accepted_at FROM users WHERE email = $1"
+	if err := db.QueryRow(context.Background(), query, payload["email"]).Scan(&version, &acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	if version != service.SignupLegalVersion || acceptedAt.IsZero() {
+		t.Fatalf("wrong signup receipt: version %q at %s", version, acceptedAt)
+	}
+}
+
 func resetToken(t *testing.T, link string) string {
 	t.Helper()
 	u, err := url.Parse(link)

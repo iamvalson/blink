@@ -26,9 +26,11 @@ func NewSignupHandler(signup *service.SignupService, secureCookie, cookieSecure 
 }
 
 type signupRequest struct {
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	Password    string `json:"password"`
+	Email        string `json:"email"`
+	DisplayName  string `json:"display_name"`
+	AcceptTerms  bool   `json:"accept_terms"`
+	LegalVersion string `json:"legal_version"`
+	Password     string `json:"password"`
 }
 
 type signupResponse struct {
@@ -56,9 +58,11 @@ func (h *SignupHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	result, err := h.signup.Signup(
 		r.Context(),
 		service.SignupInput{
-			Email:       req.Email,
-			DisplayName: req.DisplayName,
-			Password:    req.Password,
+			Email:        req.Email,
+			DisplayName:  req.DisplayName,
+			Password:     req.Password,
+			AcceptTerms:  req.AcceptTerms,
+			LegalVersion: req.LegalVersion,
 		},
 	)
 
@@ -67,7 +71,7 @@ func (h *SignupHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrEmailAlreadyExists):
 			http.Error(w, "email already exists", http.StatusConflict)
 
-		case errors.Is(err, auth.ErrInvalidPassword):
+		case errors.Is(err, auth.ErrInvalidPassword), errors.Is(err, service.ErrLegalAcceptanceRequired):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 
 		default:
