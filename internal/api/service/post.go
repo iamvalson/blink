@@ -54,7 +54,7 @@ func (s *PostService) CreatePost(
 	}
 
 	// Validate input
-	if input.Caption == nil || *input.Caption == "" {
+	if !input.IsTikTokInboxUpload() && (input.Caption == nil || *input.Caption == "") {
 		return nil, fmt.Errorf("%w: caption is required", ErrPostValidation)
 	}
 

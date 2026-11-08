@@ -1,0 +1,9 @@
+ALTER TABLE posts DROP CONSTRAINT posts_status_check;
+ALTER TABLE posts ADD CONSTRAINT posts_status_check CHECK (status IN (
+    'DRAFT', 'SCHEDULED', 'QUEUED', 'PUBLISHING', 'PUBLISHED', 'PARTIALLY_PUBLISHED', 'FAILED', 'CANCELLED', 'INBOX_DELIVERED'
+));
+
+ALTER TABLE post_targets DROP CONSTRAINT post_targets_status_check;
+ALTER TABLE post_targets ADD CONSTRAINT post_targets_status_check CHECK (status IN (
+    'PENDING', 'PUBLISHING', 'PUBLISHED', 'FAILED', 'CANCELLED', 'INBOX_DELIVERED'
+));

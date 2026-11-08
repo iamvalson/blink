@@ -23,6 +23,7 @@ const (
 
 // terminalPostStatuses are statuses where no further status changes are expected.
 var terminalPostStatuses = map[string]bool{
+	model.StatusInboxDelivered:     true,
 	model.StatusPublished:          true,
 	model.StatusPartiallyPublished: true,
 	model.StatusFailed:             true,

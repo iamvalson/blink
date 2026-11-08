@@ -73,6 +73,10 @@ func (p *PublishProcessor) publishAsyncVideo(ctx context.Context, post *model.Po
 		if op.PublishID == nil {
 			return p.requireManualReview(ctx, attempt.ID, "TikTok initialization may have been accepted without a saved publish ID. Review TikTok before retrying.")
 		}
+		// Replay a confirmed delivery if the worker stopped before finalizing it.
+		if op.SendToInbox && (op.RemoteStatus == "SEND_TO_USER_INBOX" || op.RemoteStatus == "PUBLISH_COMPLETE") {
+			return p.completeTikTokInboxUpload(ctx, attempt.ID, target.ID)
+		}
 		if time.Now().After(op.Deadline) || op.PollCount >= 3000 {
 			return p.requireManualReview(ctx, attempt.ID, "TikTok polling limit reached; publication remains unconfirmed")
 		}
@@ -111,6 +115,12 @@ func (p *PublishProcessor) publishAsyncVideo(ctx context.Context, post *model.Po
 			return store.QueueAsyncCheck(ctx, attempt.ID, op.RemoteStatus, time.Now().Add(delay))
 		}
 		contextLogger.Info().Str("event", "tiktok_status_received").Str("status", status.Status).Msg("received TikTok publication status")
+		if op.SendToInbox && (status.Status == "SEND_TO_USER_INBOX" || status.Status == "PUBLISH_COMPLETE") {
+			if err := store.RecordAsyncTerminal(ctx, attempt.ID, status.Status); err != nil {
+				return err
+			}
+			return p.completeTikTokInboxUpload(ctx, attempt.ID, target.ID)
+		}
 		if status.Status == "PUBLISH_COMPLETE" || status.Status == "FAILED" {
 			if err := store.RecordAsyncTerminal(ctx, attempt.ID, status.Status); err != nil {
 				return err
@@ -138,7 +148,7 @@ func (p *PublishProcessor) publishAsyncVideo(ctx context.Context, post *model.Po
 		case "PROCESSING_DOWNLOAD", "PROCESSING_UPLOAD":
 			return store.QueueAsyncCheck(ctx, attempt.ID, status.Status, time.Now().Add(interval))
 		default:
-			return p.requireManualReview(ctx, attempt.ID, "TikTok returned an unrecognized Direct Post state; saved publish ID retained")
+			return p.requireManualReview(ctx, attempt.ID, "TikTok returned an unrecognized video delivery state; saved publish ID retained")
 		}
 	}
 	// No initialization marker means no initialization call was allowed to start.
@@ -206,7 +216,7 @@ func (p *PublishProcessor) publishAsyncVideo(ctx context.Context, post *model.Po
 		return newPublishError(connectors.ClassifyError(err), err)
 	}
 	stage = "validating_creator"
-	contextLogger.Info().Str("event", "tiktok_creator_validation_started").Msg("checking latest TikTok creator permissions")
+	contextLogger.Info().Str("event", "tiktok_creator_validation_started").Msg("checking TikTok delivery requirements")
 	if err = async.ValidateVideo(ctx, token, input); errors.Is(err, connectors.ErrAuthFailed) {
 		token, _, err = p.refreshAccessToken(ctx, account, connector)
 		if err == nil {
@@ -216,12 +226,12 @@ func (p *PublishProcessor) publishAsyncVideo(ctx context.Context, post *model.Po
 	if err != nil {
 		return newPublishError(connectors.ClassifyError(err), err)
 	}
-	contextLogger.Info().Str("event", "tiktok_creator_validated").Msg("TikTok creator publishing options validated")
+	contextLogger.Info().Str("event", "tiktok_creator_validated").Msg("TikTok delivery requirements validated")
 	stage = "initializing_publication"
 	if err = store.BeginAsyncPublication(ctx, attempt.ID, time.Now().Add(deadline)); err != nil {
 		return err
 	}
-	contextLogger.Info().Str("event", "tiktok_initialization_started").Msg("initializing TikTok Direct Post")
+	contextLogger.Info().Str("event", "tiktok_initialization_started").Msg("initializing TikTok video delivery")
 	publishID, initErr := async.InitializeVideo(ctx, token, input)
 	if initErr != nil {
 		if connectors.ClassifyError(initErr) == connectors.ErrorAmbiguous {
@@ -248,4 +258,11 @@ func safeFailureReason(reason string) string {
 		return reason
 	}
 	return "unrecognized_failure"
+}
+
+func (p *PublishProcessor) completeTikTokInboxUpload(ctx context.Context, attemptID, targetID uuid.UUID) error {
+	if err := p.publications.MarkAttemptSucceeded(ctx, attemptID, "", ""); err != nil {
+		return err
+	}
+	return p.publications.MarkPostTargetPublished(ctx, targetID)
 }

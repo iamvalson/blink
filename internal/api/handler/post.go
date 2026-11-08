@@ -57,7 +57,7 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// Validate input
-	if input.Caption == nil || *input.Caption == "" {
+	if !input.IsTikTokInboxUpload() && (input.Caption == nil || *input.Caption == "") {
 		http.Error(w, "caption is required", http.StatusBadRequest)
 		return
 	}

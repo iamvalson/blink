@@ -31,7 +31,7 @@ func (s *asyncTestStore) GetAsyncPublication(context.Context, uuid.UUID) (*model
 	return s.op, nil
 }
 func (s *asyncTestStore) BeginAsyncPublication(_ context.Context, _ uuid.UUID, d time.Time) error {
-	s.op = &model.AsyncPublication{Deadline: d}
+	s.op = &model.AsyncPublication{Deadline: d, SendToInbox: s.options.SendToInbox}
 	return nil
 }
 func (s *asyncTestStore) ClearRejectedAsyncPublication(context.Context, uuid.UUID) error {
@@ -239,4 +239,28 @@ func (s *asyncTestStore) RecordAsyncTerminal(_ context.Context, _ uuid.UUID, sta
 	s.op.RemoteStatus = status
 	s.op.NextCheckAt = nil
 	return nil
+}
+
+func TestAsyncInboxDeliveryResumesWithoutSendingAgain(t *testing.T) {
+	p, s, c := asyncFixture(t)
+	s.options = model.TikTokOptions{SendToInbox: true, Consent: true}
+	ctx := context.Background()
+	if err := p.publishToTarget(ctx, s.post, &s.target); err != nil {
+		t.Fatal(err)
+	}
+	due(s)
+	c.status = "SEND_TO_USER_INBOX"
+	s.successError = true
+	if err := p.publishToTarget(ctx, s.post, &s.target); err == nil {
+		t.Fatal("expected failed local completion")
+	}
+	s.successError = false
+	s.op.Deadline = time.Now().Add(-time.Second)
+	if err := p.publishToTarget(ctx, s.post, &s.target); err != nil {
+		t.Fatal(err)
+	}
+	if c.initializations != 1 || c.polls != 1 || s.op.RemoteStatus != "SEND_TO_USER_INBOX" || s.attempt.Status != "SUCCEEDED" ||
+		s.attempt.PlatformPostID == nil || *s.attempt.PlatformPostID != "" {
+		t.Fatal("Inbox delivery must complete without another API request or a public post ID")
+	}
 }

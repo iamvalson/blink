@@ -38,6 +38,7 @@ import {
 
 const TERMINAL_STATUSES = new Set([
   "PUBLISHED",
+  "INBOX_DELIVERED",
   "PARTIALLY_PUBLISHED",
   "FAILED",
   "CANCELLED",
@@ -81,6 +82,7 @@ const STATUS_FILTERS = [
   { value: "QUEUED", label: "Queued" },
   { value: "PUBLISHING", label: "Publishing" },
   { value: "PUBLISHED", label: "Published" },
+  { value: "INBOX_DELIVERED", label: "Sent to TikTok Inbox" },
   { value: "FAILED", label: "Failed" },
   { value: "PARTIALLY_PUBLISHED", label: "Partially published" },
 ];
@@ -134,7 +136,8 @@ function PostCard({
   const canDelete =
     post.status !== "QUEUED" && post.status !== "PUBLISHING" && post.status !== "PROCESSING";
   const canRetry = post.status === "FAILED" || post.status === "PARTIALLY_PUBLISHED";
-  const canReschedule = post.status === "SCHEDULED" || post.status === "QUEUED";
+  const canReschedule = (post.status === "SCHEDULED" || post.status === "QUEUED") &&
+    !post.targets?.some(target => target.send_to_tiktok_inbox);
 
   const handleDelete = async () => {
     if (!confirm("Delete this post? This action cannot be undone.")) return;

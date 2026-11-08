@@ -284,3 +284,68 @@ func TestTikTokPermanentRejectionStopsPolling(t *testing.T) {
 		t.Fatal("terminal failure repeated external operation")
 	}
 }
+
+func TestTikTokInboxUploadCompletesAsDelivery(t *testing.T) {
+	db := testDatabase(t)
+	ctx := context.Background()
+	f := fixture(t, db, nil)
+	execSQL(t, db, `UPDATE social_accounts SET platform='tiktok',expires_at=NOW()+INTERVAL '1 hour' WHERE id=$1`, f.accountID)
+	mediaRepo := storage.NewMediaRepository(db)
+	media, err := mediaRepo.CreatePendingMedia(ctx, f.userID, "r2", "private/video", "video.mp4", "video/mp4", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mediaRepo.MarkComplete(ctx, media.ID, 5); err != nil {
+		t.Fatal(err)
+	}
+	posts := storage.NewPostRepository(db)
+	input := model.CreatePostInput{
+		Targets:       []uuid.UUID{f.accountID},
+		MediaID:       &media.ID,
+		TikTokOptions: map[string]model.TikTokOptions{f.accountID.String(): {SendToInbox: true, Consent: true}},
+	}
+	post, err := service.NewPostService(posts).CreatePost(ctx, f.userID, uuid.NewString(), input)
+	if err != nil || post.Status != model.StatusQueued {
+		t.Fatalf("Inbox upload was not queued without a caption: %+v %v", post, err)
+	}
+	if _, err := posts.ReschedulePost(ctx, f.userID, post.ID, time.Now().Add(time.Hour)); !errors.Is(err, storage.ErrPostCannotBeRescheduled) {
+		t.Fatalf("Inbox upload reschedule: %v", err)
+	}
+	detail, err := posts.GetPostWithDetails(ctx, f.userID, post.ID)
+	if err != nil || len(detail.Targets) != 1 || !detail.Targets[0].SendToTikTokInbox {
+		t.Fatalf("missing Inbox mode: %+v %v", detail, err)
+	}
+	targetID := detail.Targets[0].ID
+	repo := storage.NewPublicationRepository(db)
+	attempt, err := repo.GetPublicationAttempt(ctx, targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, db, `UPDATE posts SET status='PUBLISHING' WHERE id=$1`, post.ID)
+	if err := repo.MarkAttemptProcessing(ctx, attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.BeginAsyncPublication(ctx, attempt.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveAsyncPublication(ctx, attempt.ID, "inbox-operation", time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	c := &durableTikTok{MockConnector: connectors.NewMockConnector(), status: "SEND_TO_USER_INBOX"}
+	p := worker.NewPublishProcessor(posts, repo, map[string]connectors.PlatformConnector{"tiktok": c}, testKey)
+	task, err := jobs.NewPublishTaskForJob(jobs.PublishJob{PostID: post.ID, TargetID: &targetID, AttemptID: &attempt.ID, SchedulingGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := p.ProcessTikTokStatusJob(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	details, total, err := posts.ListPosts(ctx, f.userID, storage.ListPostsFilter{Status: model.StatusInboxDelivered})
+	if err != nil || total != 1 || len(details) != 1 || details[0].ID != post.ID ||
+		details[0].PublishedAt != nil || details[0].Targets[0].Status != model.StatusInboxDelivered ||
+		details[0].Targets[0].PublishedAt != nil || c.polls != 1 || c.inits != 0 {
+		t.Fatalf("Inbox delivery did not finalize correctly: %+v, polls %d, initializations %d, error %v", details, c.polls, c.inits, err)
+	}
+}

@@ -27,7 +27,14 @@ func (r *PublicationRepository) GetTikTokOptions(ctx context.Context, target uui
 }
 func (r *PublicationRepository) GetAsyncPublication(ctx context.Context, attempt uuid.UUID) (*model.AsyncPublication, error) {
 	var op model.AsyncPublication
-	err := r.db.QueryRow(ctx, `SELECT publish_id,remote_status,poll_count,next_check_at,deadline FROM tiktok_publications WHERE publication_attempt_id=$1`, attempt).Scan(&op.PublishID, &op.RemoteStatus, &op.PollCount, &op.NextCheckAt, &op.Deadline)
+	err := r.db.QueryRow(ctx, `
+  SELECT tp.publish_id, tp.remote_status, tp.poll_count, tp.next_check_at, tp.deadline,
+         COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
+  FROM tiktok_publications tp
+  JOIN publication_attempts pa ON pa.id = tp.publication_attempt_id
+  JOIN post_targets pt ON pt.id = pa.post_target_id
+  WHERE tp.publication_attempt_id = $1
+ `, attempt).Scan(&op.PublishID, &op.RemoteStatus, &op.PollCount, &op.NextCheckAt, &op.Deadline, &op.SendToInbox)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -84,7 +91,7 @@ func (r *PublicationRepository) persistAsyncCheck(ctx context.Context, attempt u
 // RecordAsyncTerminal records the platform's terminal response before finalizing
 // the Blink attempt. A failed finalization still reconciles using the same ID.
 func (r *PublicationRepository) RecordAsyncTerminal(ctx context.Context, attempt uuid.UUID, status string) error {
-	if status != "PUBLISH_COMPLETE" && status != "FAILED" {
+	if status != "PUBLISH_COMPLETE" && status != "FAILED" && status != "SEND_TO_USER_INBOX" {
 		return errors.New("invalid terminal TikTok status")
 	}
 	tag, err := r.db.Exec(ctx, `UPDATE tiktok_publications SET remote_status=$2,next_check_at=NULL,updated_at=NOW() WHERE publication_attempt_id=$1 AND publish_id IS NOT NULL`, attempt, status)

@@ -40,7 +40,7 @@ export function usePost(id: string | null, enabled = true) {
     // before a manual retry. Scheduled posts need only a periodic refresh.
     refetchInterval: (query) => {
       const post = query.state.data;
-      if (!post || ["PUBLISHED", "PARTIALLY_PUBLISHED", "FAILED", "CANCELLED"].includes(post.status)) return false;
+      if (!post || ["PUBLISHED", "INBOX_DELIVERED", "PARTIALLY_PUBLISHED", "FAILED", "CANCELLED"].includes(post.status)) return false;
       return post.status === "SCHEDULED" ? 30_000 : 5000;
     },
     refetchIntervalInBackground: false,
