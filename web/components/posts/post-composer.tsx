@@ -66,6 +66,8 @@ export function PostComposer() {
 
   const [composerView, setComposerView] = useState<"write" | "preview">("write");
   const [caption, setCaption] = useState("");
+  const [tikTokInboxAccount, setTikTokInboxAccount] = useState("");
+  const [tikTokInboxConsentMedia, setTikTokInboxConsentMedia] = useState<string | null>(null);
   const [tikTokAccount, setTikTokAccount] = useState("");
   const [tikTokChoices, setTikTokChoices] = useState<Record<string,TikTokOptions>>({});
   const [selectedPlatforms, setSelectedPlatforms] = useState<Platform[]>([]);
@@ -105,11 +107,11 @@ export function PostComposer() {
     phase !== "submitting"
   ) {
     if (
-      displayPost.status === "PUBLISHED" &&
+      ["PUBLISHED", "INBOX_DELIVERED"].includes(displayPost.status) &&
       phase !== "published"
     ) {
       setPhase("published");
-      toast.success("Post published successfully!");
+      toast.success(displayPost.status === "INBOX_DELIVERED" ? "Video sent to your TikTok Inbox." : "Post published successfully!");
     } else if (displayPost.status === "PARTIALLY_PUBLISHED" && phase !== "partial") {
       setPhase("partial");
       toast.warning("Some platforms published. Review failed targets before retrying.");
@@ -133,10 +135,36 @@ export function PostComposer() {
   const isTikTokSelected = resolvedSelectedPlatforms.includes("tiktok");
   const tikTokAccounts = connectedAccounts.filter(a => a.platform === "tiktok");
   const tikTokAccountID = tikTokAccounts.some(a => a.id === tikTokAccount) ? tikTokAccount : (tikTokAccounts[0]?.id ?? "");
-  const creatorQuery = useQuery({queryKey:["tiktok-creator",tikTokAccountID],queryFn:()=>getTikTokCreatorInfo(tikTokAccountID),enabled:isTikTokSelected && Boolean(tikTokAccountID),staleTime:0,refetchOnMount:"always",retry:false});
-  const tikTokOptions = effectiveTikTokOptions({...emptyTikTokOptions,...tikTokChoices[tikTokAccountID],duration_seconds:videoMetadata?.duration ?? 0},creatorQuery.data);
-  const tikTokError = isTikTokSelected ? (creatorQuery.isFetching ? "Loading current TikTok creator settings…" : creatorQuery.isError ? "TikTok creator settings could not be loaded. Refresh to try again." : validateTikTokPost(tikTokOptions,creatorQuery.data,media.map(m=>({contentType:m.file.type,complete:m.uploadStatus==="complete" && Boolean(m.mediaId),size:m.file.size})),videoMetadata,caption)) : null;
-  const tikTokPayload = isTikTokSelected ? { [tikTokAccountID]: tikTokOptions } : undefined;
+  const canSendToTikTokInbox = isTikTokSelected && resolvedSelectedPlatforms.length === 1 && Boolean(tikTokAccountID);
+  const sendToTikTokInbox = canSendToTikTokInbox && tikTokInboxAccount === tikTokAccountID;
+  const creatorQuery = useQuery({queryKey:["tiktok-creator",tikTokAccountID],queryFn:()=>getTikTokCreatorInfo(tikTokAccountID),enabled:isTikTokSelected && Boolean(tikTokAccountID) && !sendToTikTokInbox,staleTime:0,refetchOnMount:"always",retry:false});
+  const tikTokOptions = effectiveTikTokOptions(
+    { ...emptyTikTokOptions, ...tikTokChoices[tikTokAccountID], duration_seconds: videoMetadata?.duration ?? 0 },
+    creatorQuery.data,
+  );
+  const inboxMediaID = media.length === 1 ? media[0].mediaId : null;
+  const inboxOptions = {
+    ...emptyTikTokOptions,
+    send_to_inbox: true,
+    consent: Boolean(inboxMediaID && inboxMediaID === tikTokInboxConsentMedia),
+  };
+  const selectedTikTokOptions = sendToTikTokInbox ? inboxOptions : tikTokOptions;
+  const tikTokMedia = media.map(item => ({
+    contentType: item.file.type,
+    complete: item.uploadStatus === "complete" && Boolean(item.mediaId),
+    size: item.file.size,
+  }));
+  let tikTokError: string | null = null;
+  if (isTikTokSelected) {
+    if (!sendToTikTokInbox && creatorQuery.isFetching) {
+      tikTokError = "Loading current TikTok creator settings…";
+    } else if (!sendToTikTokInbox && creatorQuery.isError) {
+      tikTokError = "TikTok creator settings could not be loaded. Refresh to try again.";
+    } else {
+      tikTokError = validateTikTokPost(selectedTikTokOptions, creatorQuery.data, tikTokMedia, videoMetadata, caption);
+    }
+  }
+  const tikTokPayload = isTikTokSelected ? { [tikTokAccountID]: selectedTikTokOptions } : undefined;
   const isYouTubeSelected = resolvedSelectedPlatforms.includes("youtube");
   const isXSelected = resolvedSelectedPlatforms.includes("twitter");
 
@@ -366,7 +394,7 @@ export function PostComposer() {
       return;
     }
 
-    if (!caption.trim()) {
+    if (!sendToTikTokInbox && !caption.trim()) {
       toast.error("Add a caption before publishing.");
       return;
     }
@@ -445,7 +473,7 @@ export function PostComposer() {
       setPhase("submitting");
 
       const post = await createPost({
-        caption: caption.trim(),
+        caption: sendToTikTokInbox ? "" : caption.trim(),
         targets,
         media_id: primaryMediaId,
         media_ids: mediaIds.length > 0 ? mediaIds : null,
@@ -455,7 +483,7 @@ export function PostComposer() {
 
       setSubmittedPost(post);
       setPhase("queued");
-      toast.success("Post accepted and queued for publishing.");
+      toast.success(sendToTikTokInbox ? "Video queued for TikTok Inbox delivery." : "Post accepted and queued for publishing.");
       // Do NOT reset the form here — keep data visible until success/failure is confirmed
 
     } catch (error) {
@@ -483,6 +511,7 @@ export function PostComposer() {
   };
 
   const handleScheduleSubmit = async (isoDate: string) => {
+    if (sendToTikTokInbox) return;
     // Run same validations as handlePublish
     if (isLoadingAccounts) return;
     if (tikTokError) { toast.error(tikTokError); return; }
@@ -598,6 +627,8 @@ export function PostComposer() {
     setMedia([]);
     setYoutubeFormat("VIDEO");
     setTikTokChoices({});
+    setTikTokInboxAccount("");
+    setTikTokInboxConsentMedia(null);
     setPhase("idle");
     setSubmittedPost(null);
   };
@@ -606,13 +637,13 @@ export function PostComposer() {
   const isDisabled = isSubmitting || phase === "scheduling" || phase === "queued" || phase === "published" || phase === "scheduled";
 
   const publishButtonLabel = {
-    idle: "Publish",
+    idle: sendToTikTokInbox ? "Send to TikTok Inbox" : "Publish",
     submitting: "Submitting…",
     scheduling: "Scheduling…",
     scheduled: "Scheduled",
     queued: "Queued",
-    published: "Published",
-    failed: "Retry Publish",
+    published: displayPost?.status === "INBOX_DELIVERED" ? "Sent to TikTok Inbox" : "Published",
+    failed: sendToTikTokInbox ? "Retry Inbox upload" : "Retry Publish",
     partial: "Retry failed targets",
   }[phase];
 
@@ -677,11 +708,47 @@ export function PostComposer() {
 
             {isTikTokSelected && <>
               <label className="block text-sm font-medium">TikTok account
-                <select value={tikTokAccountID} onChange={e=>setTikTokAccount(e.target.value)} disabled={isDisabled} className="mt-1 block min-h-11 w-full min-w-0 rounded border bg-background p-2 text-base sm:text-sm">
+                <select value={tikTokAccountID} onChange={event => {
+                  setTikTokAccount(event.target.value);
+                  setTikTokInboxAccount("");
+                  setTikTokInboxConsentMedia(null);
+                }} disabled={isDisabled} className="mt-1 block min-h-11 w-full min-w-0 rounded border bg-background p-2 text-base sm:text-sm">
                   {tikTokAccounts.map(a=><option key={a.id} value={a.id}>{a.platform_user_id}</option>)}
                 </select>
               </label>
-              <TikTokSettings key={tikTokAccountID} creator={creatorQuery.data} options={tikTokOptions} onChange={options=>setTikTokChoices(previous=>({...previous,[tikTokAccountID]:options}))} disabled={isDisabled} loading={creatorQuery.isFetching} error={tikTokError} onRefresh={()=>{void creatorQuery.refetch();}} />
+              {canSendToTikTokInbox && (
+                <label className="block text-sm font-medium">
+                  TikTok delivery
+                  <select
+                    value={sendToTikTokInbox ? "inbox" : "direct"}
+                    onChange={event => {
+                      setTikTokInboxAccount(event.target.value === "inbox" ? tikTokAccountID : "");
+                      setTikTokInboxConsentMedia(null);
+                    }}
+                    disabled={isDisabled || phase !== "idle"}
+                    className="mt-1 block min-h-11 w-full rounded border bg-background p-2"
+                  >
+                    <option value="direct">Publish directly</option>
+                    <option value="inbox">Send as draft to TikTok Inbox</option>
+                  </select>
+                </label>
+              )}
+              {sendToTikTokInbox ? (
+                <fieldset disabled={isDisabled || phase !== "idle"} className="space-y-2 rounded-lg border p-3 text-sm">
+                  <legend className="px-1 font-medium">TikTok Inbox upload</legend>
+                  <p>After delivery, open the notification in your TikTok Inbox to edit the video, add a caption, and post in TikTok.</p>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={inboxOptions.consent}
+                      disabled={!inboxMediaID}
+                      onChange={event => setTikTokInboxConsentMedia(event.target.checked ? inboxMediaID ?? null : null)}
+                    />
+                    I authorize Blink to send this video to my TikTok Inbox.
+                  </label>
+                  {tikTokError && <p className="text-destructive">{tikTokError}</p>}
+                </fieldset>
+              ) : <TikTokSettings key={tikTokAccountID} creator={creatorQuery.data} options={tikTokOptions} onChange={options=>setTikTokChoices(previous=>({...previous,[tikTokAccountID]:options}))} disabled={isDisabled} loading={creatorQuery.isFetching} error={tikTokError} onRefresh={()=>{void creatorQuery.refetch();}} />}
             </>}
             {/* YouTube format selector — only when YouTube is selected */}
             {isYouTubeSelected && (
@@ -697,7 +764,7 @@ export function PostComposer() {
 
             <Separator />
 
-            <div className="space-y-3">
+            {!sendToTikTokInbox && <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label htmlFor="post-caption" className="text-sm font-medium">
                   {isYouTubeSelected ? "Title / Caption" : "Caption"}
@@ -724,7 +791,7 @@ export function PostComposer() {
                 disabled={isDisabled}
                 className="w-full resize-none rounded-lg border bg-background px-3 py-3 text-base outline-none sm:px-4 sm:text-sm transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
-            </div>
+            </div>}
 
             {/* Media uploader */}
             <MediaUploader
@@ -806,7 +873,7 @@ export function PostComposer() {
                 variant="outline"
                 onClick={() => setScheduleOpen(true)}
                 className="min-h-11 flex-1 sm:flex-none"
-                disabled={isDisabled || Boolean(tikTokError)}
+                disabled={isDisabled || sendToTikTokInbox || Boolean(tikTokError)}
               >
                 <CalendarClock className="mr-2 h-4 w-4" />
                 Schedule
@@ -820,8 +887,7 @@ export function PostComposer() {
                   isRetrying ||
                   (phase !== "failed" && phase !== "partial" && Boolean(tikTokError)) ||
                   hasUploadingMedia ||
-                  !caption.trim() ||
-                  charactersRemaining < 0 ||
+                  (!sendToTikTokInbox && (!caption.trim() || charactersRemaining < 0)) ||
                   connectedAccounts.length === 0
                 }
                 className="min-h-11 flex-1 sm:flex-none"
@@ -835,7 +901,7 @@ export function PostComposer() {
 
         <div id="composer-preview" className={composerView === "write" ? "hidden min-w-0 xl:sticky xl:top-20 xl:block" : "min-w-0 xl:sticky xl:top-20"}>
           <PostPreview
-            caption={caption}
+            caption={sendToTikTokInbox ? "" : caption}
             media={media}
             platforms={resolvedSelectedPlatforms}
           />

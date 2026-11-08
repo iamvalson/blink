@@ -119,3 +119,39 @@ func TestUnauditedTikTokAccountRejectionIsActionable(t *testing.T) {
 		t.Fatalf("missing recovery instructions: %v", err)
 	}
 }
+
+func TestInitializeInboxUpload(t *testing.T) {
+	const mediaURL = "https://media.example/tiktok-media/video"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v2/post/publish/inbox/video/init/" || r.Header.Get("Authorization") != "Bearer token" {
+			t.Errorf("unexpected Inbox upload request: %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			SourceInfo SourceInfo      `json:"source_info"`
+			PostInfo   json.RawMessage `json:"post_info"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body.SourceInfo != (SourceInfo{Source: "PULL_FROM_URL", VideoURL: mediaURL}) || len(body.PostInfo) != 0 {
+			t.Errorf("unexpected Inbox upload payload: %+v", body)
+		}
+		if _, err := io.WriteString(w, `{"data":{"publish_id":"inbox-1"},"error":{"code":"ok"}}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	c := New(TikTokConfig{MediaURLPrefix: "https://media.example/tiktok-media"}, &http.Client{Transport: rewriteTransport{server.URL}})
+	in := connectors.VideoPublishInput{MediaURL: mediaURL, Options: model.TikTokOptions{SendToInbox: true}}
+	if _, err := c.InitializeVideo(context.Background(), "token", in); err == nil {
+		t.Fatal("accepted Inbox upload without consent")
+	}
+	in.Options.Consent = true
+	if err := c.ValidateVideo(context.Background(), "token", in); err != nil {
+		t.Fatalf("Inbox preflight should succeed without the Direct Post creator query: %v", err)
+	}
+	id, err := c.InitializeVideo(context.Background(), "token", in)
+	if err != nil || id != "inbox-1" {
+		t.Fatalf("unexpected operation ID %q: %v", id, err)
+	}
+}
