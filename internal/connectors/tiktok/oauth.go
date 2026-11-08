@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -135,6 +136,40 @@ func ExchangeCodeForToken(ctx context.Context, oauthConfig *oauth2.Config, code 
 		"scope":              tokenResponse.Scope,
 		"refresh_expires_in": tokenResponse.RefreshExpiresIn,
 	}), nil
+}
+
+// RevokeTokens disconnects the app from TikTok using the current access token.
+func (c *Connector) RevokeTokens(ctx context.Context, accessToken, _ string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	form := url.Values{
+		"client_key":    {c.oauthConfig.ClientID},
+		"client_secret": {c.oauthConfig.ClientSecret},
+		"token":         {accessToken},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://open.tiktokapis.com/v2/oauth/revoke/", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build TikTok revocation request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("contact TikTok to revoke access: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Error string `json:"error"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result)
+	if resp.StatusCode == http.StatusOK && (decodeErr == io.EOF || (decodeErr == nil && result.Error == "")) {
+		return nil
+	}
+	if decodeErr == nil && result.Error == "invalid_token" &&
+		(resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized) {
+		return nil
+	}
+	return fmt.Errorf("TikTok token revocation failed (HTTP %d)", resp.StatusCode)
 }
 
 // RefreshToken uses TikTok's OAuth token endpoint.

@@ -18,7 +18,7 @@ import { usePathname } from "next/navigation";
 const navigation = [
   {
     label: "Overview",
-    href: "/",
+    href: "/dashboard",
     icon: LayoutDashboard,
   },
   {
@@ -75,7 +75,7 @@ export function Sidebar() {
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden h-screen w-60 shrink-0 border-r bg-background px-2.75 py-3.5 lg:flex lg:flex-col">
       <div className="flex h-14 items-center px-5">
-        <Link href="/" className="text-lg font-semibold tracking-tight">
+        <Link href="/dashboard" className="text-lg font-semibold tracking-tight">
           Blink
         </Link>
       </div>
@@ -90,8 +90,8 @@ export function Sidebar() {
               const Icon = item.icon;
 
               const isActive =
-                item.href === "/"
-                  ? pathname === "/"
+                item.href === "/dashboard"
+                  ? pathname === "/dashboard"
                   : pathname.startsWith(item.href);
 
               return (
@@ -119,8 +119,8 @@ export function Sidebar() {
               const Icon = item.icon;
 
               const isActive =
-                item.href === "/"
-                  ? pathname === "/"
+                item.href === "/dashboard"
+                  ? pathname === "/dashboard"
                   : pathname.startsWith(item.href);
 
               return (

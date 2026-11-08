@@ -1,3 +1,4 @@
+import { appName } from "@/lib/brand";
 import Link from "next/link";
 import { SIGNUP_LEGAL_VERSION } from "@/lib/signup-legal-version";
 
@@ -7,7 +8,7 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
       <header className="border-b">
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-2 sm:px-6">
           <Link href="/" className="flex min-h-11 items-center text-xl font-semibold tracking-tight">
-            Blink
+            {appName}
           </Link>
           <Link href="/signup" className="flex min-h-11 items-center text-sm font-medium underline-offset-4 hover:underline">
             Create an account

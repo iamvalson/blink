@@ -76,7 +76,7 @@ export function SignupForm() {
 
     signup.mutate(signupData, {
       onSuccess: () => {
-        router.push("/");
+        router.replace("/dashboard");
       },
     });
   };

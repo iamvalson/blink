@@ -48,6 +48,42 @@ func ExchangeCodeForToken(ctx context.Context, oauthConfig *oauth2.Config, code,
 	return token, nil
 }
 
+// RevokeTokens invalidates both credentials because X accepts them separately.
+func (c *Connector) RevokeTokens(ctx context.Context, accessToken, refreshToken string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	client := c.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	for _, token := range []string{refreshToken, accessToken} {
+		if token == "" {
+			continue
+		}
+		form := url.Values{"token": {token}}
+		if c.oauthConfig.ClientSecret == "" {
+			form.Set("client_id", c.oauthConfig.ClientID)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.x.com/2/oauth2/revoke", strings.NewReader(form.Encode()))
+		if err != nil {
+			return fmt.Errorf("build X revocation request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if c.oauthConfig.ClientSecret != "" {
+			req.SetBasicAuth(c.oauthConfig.ClientID, c.oauthConfig.ClientSecret)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("contact X to revoke access: %w", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("X token revocation returned HTTP %d", resp.StatusCode)
+		}
+	}
+	return nil
+}
+
 // RefreshToken uses X OAuth 2.0 offline access. The worker persists any
 // rotated refresh token; this method never handles ciphertext or storage.
 func (c *Connector) RefreshToken(ctx context.Context, refreshToken string) (connectors.TokenResult, error) {

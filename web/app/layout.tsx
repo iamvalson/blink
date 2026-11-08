@@ -1,3 +1,4 @@
+import { appName } from "@/lib/brand";
 import { QueryProvider } from "@/providers/query-provider";
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
@@ -11,7 +12,7 @@ const inter = Inter({
 export const viewport: Viewport = { viewportFit: "cover" };
 
 export const metadata: Metadata = {
-  title: "Blink",
+  title: appName,
   description: "Social media management platform",
 };
 

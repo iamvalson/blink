@@ -128,17 +128,47 @@ func (r *SocialAccountRepository) ListByUserID(ctx context.Context, userID strin
 	return accounts, nil
 }
 
-func (r *SocialAccountRepository) DeleteByUserIDAndPlatform(ctx context.Context, userID string, platform string) error {
-	const query = `
-		DELETE FROM social_accounts
-		WHERE user_id = $1 AND platform = $2
-	`
-	_, err := r.db.Exec(ctx, query, userID, platform)
+func (r *SocialAccountRepository) GetAccountID(ctx context.Context, userID, platform string) (string, error) {
+	var id string
+	err := r.db.QueryRow(ctx, "SELECT id FROM social_accounts WHERE user_id = $1 AND platform = $2", userID, platform).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrSocialAccountNotFound
+	}
+	return id, err
+}
+
+// RevokeAndDeleteAccount locks the connection against token refresh and
+// reconnect while its grant is being revoked. The foreign keys remove associated
+// publication targets, attempts, and results when the account is deleted.
+func (r *SocialAccountRepository) RevokeAndDeleteAccount(ctx context.Context, userID, platform string, revoke func(accessToken string, refreshToken *string) error) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("begin account disconnect: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var id uuid.UUID
+	var accessToken string
+	var refreshToken *string
+	err = tx.QueryRow(ctx, `
+		SELECT id, access_token, refresh_token
+		FROM social_accounts
+		WHERE user_id = $1 AND platform = $2
+		FOR UPDATE
+	`, userID, platform).Scan(&id, &accessToken, &refreshToken)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock social account: %w", err)
+	}
+	if err := revoke(accessToken, refreshToken); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM social_accounts WHERE id = $1", id); err != nil {
 		return fmt.Errorf("delete social account: %w", err)
 	}
-
-	return nil
+	return tx.Commit(ctx)
 }
 
 // UpdateOAuthTokens atomically persists the complete refreshed credential
