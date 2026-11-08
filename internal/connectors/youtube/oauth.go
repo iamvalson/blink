@@ -60,6 +60,40 @@ func ExchangeCodeForToken(
 	return token, nil
 }
 
+// RevokeTokens revokes the grant at Google. An explicitly invalid token is
+// already unusable, including when a user revoked it in their Google Account.
+func (c *Connector) RevokeTokens(ctx context.Context, accessToken, refreshToken string) error {
+	token := refreshToken
+	if token == "" {
+		token = accessToken
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	form := url.Values{"token": {token}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/revoke", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build YouTube revocation request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("contact Google to revoke YouTube access: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		var result struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result) == nil && result.Error == "invalid_token" {
+			return nil
+		}
+	}
+	return fmt.Errorf("Google YouTube revocation returned HTTP %d", resp.StatusCode)
+}
+
 // RefreshToken uses Google's OAuth token endpoint. Google commonly omits a
 // replacement refresh token, which is represented by a nil result field.
 func (c *Connector) RefreshToken(ctx context.Context, refreshToken string) (connectors.TokenResult, error) {

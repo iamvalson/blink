@@ -94,9 +94,13 @@ func NewRouter(
 	//     random `state`) to recover the user ID. This allows the callback to work
 	//     across different origins/domains (e.g. ngrok in development, production CDN)
 	//     without weakening cookie security.
+	revokers := make(map[string]service.AccountTokenRevoker)
 	for _, connector := range oauthConnectors {
 		authHandler := handler.NewAuthHandler(connector, accounts, encryptionKey, frontendURL, secureCookie)
 		platformID := connector.PlatformID()
+		if revoker, ok := connector.(service.AccountTokenRevoker); ok {
+			revokers[platformID] = revoker
+		}
 
 		// Initiation requires authentication — only a logged-in user can start OAuth.
 		r.With(middleware.RequireAuth(jwtService)).
@@ -108,7 +112,7 @@ func NewRouter(
 	}
 
 	// Accounts routes
-	accountsService := service.NewAccountsService(accounts, tiktokConnector, tokenManager)
+	accountsService := service.NewAccountsService(accounts, tiktokConnector, tokenManager, revokers)
 	accountsHandler := handler.NewAccountsHandler(accountsService)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts", accountsHandler.ListAccounts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts/{accountID}/tiktok/creator-info", accountsHandler.GetTikTokCreatorInfo)

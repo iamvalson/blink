@@ -30,7 +30,9 @@ export default function PrivacyPage() {
             account identifiers, permissions and authorisation tokens. We use these with the
             captions, media, destinations and schedules you provide to carry out your publishing
             requests under our agreement. Connecting an account and uploading content are optional
-            until you choose to use those features.
+            until you choose to use those features. Disconnecting an account in Blink revokes its saved
+            authorization with the platform and removes the connection and its associated publishing
+            records from Blink.
           </li>
           <li>
             <strong>Security and operation.</strong> We use technical request and job information
@@ -43,6 +45,28 @@ export default function PrivacyPage() {
         <p className="mt-3">
           Acknowledging this notice does not give Blink consent for unrelated uses. Where consent
           is the applicable basis, we ask for it separately and you may withdraw it at any time.
+        </p>
+      </section>
+
+      <section>
+        <h2>YouTube API Services</h2>
+        <p>
+          Blink uses YouTube API Services when you connect a YouTube channel. Blink reads your
+          channel ID to identify the connected channel and stores it with your encrypted
+          authorization tokens. When you publish or schedule a YouTube post, Blink sends the
+          video and publishing details you provide to YouTube. Blink uses the resulting video
+          ID and YouTube processing status to track delivery and show your publishing history.
+          See the <a href="https://www.google.com/policies/privacy">Google Privacy Policy</a> for
+          how Google handles your data.
+        </p>
+        <p className="mt-3">
+          Disconnect YouTube on the Accounts page to revoke Blink&apos;s authorization with
+          Google and remove the connection and its associated YouTube publishing records from
+          Blink. You can also open your{" "}
+          <a href="https://security.google.com/settings/security/permissions">Google Account permissions</a>
+          {" "}and remove access for Blink by earthtovalentine. To request deletion of YouTube
+          data held by Blink or ask a privacy question, email{" "}
+          <a href={"mailto:" + PRIVACY_EMAIL}>{PRIVACY_EMAIL}</a>.
         </p>
       </section>
 

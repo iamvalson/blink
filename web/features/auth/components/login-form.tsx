@@ -32,7 +32,7 @@ export function LoginForm() {
   const onSubmit = (values: LoginFormValues) => {
     login.mutate(values, {
       onSuccess: () => {
-        router.push("/");
+        router.replace("/dashboard");
       },
     });
   };

@@ -39,7 +39,8 @@ export function AccountCard({
   }
 
   function handleDisconnect() {
-    if (confirm(`Are you sure you want to disconnect ${platform.name}?`)) {
+    const message = `Disconnect ${platform.name}? This revokes Blink's access and removes publishing records for this connection from Blink.`;
+    if (confirm(message)) {
       disconnectMutation.mutate(platform.id, {
         onSuccess: () => {
           toast.success(`Successfully disconnected ${platform.name}`);

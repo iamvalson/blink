@@ -37,6 +37,14 @@ export default function TermsPage() {
       </section>
 
       <section>
+        <h2>YouTube Terms of Service</h2>
+        <p>
+          By using Blink, you agree to be bound by the{" "}
+          <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>.
+        </p>
+      </section>
+
+      <section>
         <h2>Acceptable use</h2>
         <p>
           Do not use Blink to publish unlawful content, infringe rights, send spam, impersonate

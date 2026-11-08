@@ -23,7 +23,7 @@ export function MobileHeader() {
               <ArrowLeft className="size-5" aria-hidden="true" />
             </Link>
           )}
-          <Link href="/" className="flex min-h-11 items-center text-xl font-semibold tracking-tight">
+          <Link href="/dashboard" className="flex min-h-11 items-center text-xl font-semibold tracking-tight">
             Blink
           </Link>
         </div>
