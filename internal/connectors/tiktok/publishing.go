@@ -57,15 +57,25 @@ func ValidateMediaURL(raw, prefix string) error {
 func validationError(err error) error {
 	return connectors.NewClassifiedError(connectors.ErrorPermanent, "TIKTOK_VALIDATION", err)
 }
-func (c *Connector) ValidateVideo(ctx context.Context, token string, in connectors.VideoPublishInput) error {
+func (c *Connector) validateVideoInput(in connectors.VideoPublishInput) error {
 	if err := in.Options.Validate(); err != nil {
 		return validationError(err)
 	}
-	if len(utf16.Encode([]rune(in.Caption))) > 2200 {
+	if !in.Options.SendToInbox && len(utf16.Encode([]rune(in.Caption))) > 2200 {
 		return validationError(errors.New("TikTok caption exceeds 2200 UTF-16 units"))
 	}
 	if err := ValidateMediaURL(in.MediaURL, c.mediaURLPrefix); err != nil {
 		return validationError(err)
+	}
+	return nil
+}
+
+func (c *Connector) ValidateVideo(ctx context.Context, token string, in connectors.VideoPublishInput) error {
+	if err := c.validateVideoInput(in); err != nil {
+		return err
+	}
+	if in.Options.SendToInbox {
+		return nil
 	}
 	creator, err := c.QueryCreatorInfo(ctx, token)
 	if err != nil {
@@ -98,21 +108,23 @@ func ValidateCreatorOptions(o model.TikTokOptions, creator *TikTokQueryCreatorDa
 	return nil
 }
 func (c *Connector) InitializeVideo(ctx context.Context, token string, in connectors.VideoPublishInput) (string, error) {
-	if err := in.Options.Validate(); err != nil {
-		return "", validationError(err)
+	if err := c.validateVideoInput(in); err != nil {
+		return "", err
 	}
-	if len(utf16.Encode([]rune(in.Caption))) > 2200 {
-		return "", validationError(errors.New("TikTok caption exceeds 2200 UTF-16 units"))
+	source := SourceInfo{Source: "PULL_FROM_URL", VideoURL: in.MediaURL}
+	path := "/v2/post/publish/inbox/video/init/"
+	var body any = struct {
+		SourceInfo SourceInfo `json:"source_info"`
+	}{SourceInfo: source}
+	if !in.Options.SendToInbox {
+		o := in.Options
+		path = "/v2/post/publish/video/init/"
+		body = DirectPostRequest{PostInfo: PostInfo{in.Caption, o.PrivacyLevel, o.DisableComment, o.DisableDuet, o.DisableStitch, o.BrandContentToggle, o.BrandOrganicToggle, o.IsAIGC}, SourceInfo: source}
 	}
-	if err := ValidateMediaURL(in.MediaURL, c.mediaURLPrefix); err != nil {
-		return "", validationError(err)
-	}
-	o := in.Options
-	body := DirectPostRequest{PostInfo: PostInfo{in.Caption, o.PrivacyLevel, o.DisableComment, o.DisableDuet, o.DisableStitch, o.BrandContentToggle, o.BrandOrganicToggle, o.IsAIGC}, SourceInfo: SourceInfo{"PULL_FROM_URL", in.MediaURL}}
 	var data struct {
 		PublishID string `json:"publish_id"`
 	}
-	if err := c.postJSON(ctx, token, "/v2/post/publish/video/init/", body, &data, true); err != nil {
+	if err := c.postJSON(ctx, token, path, body, &data, true); err != nil {
 		return "", err
 	}
 	if data.PublishID == "" || len(data.PublishID) > 64 {

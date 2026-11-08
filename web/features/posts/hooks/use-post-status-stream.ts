@@ -10,6 +10,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL;
 /** Post statuses that will never change again. */
 const TERMINAL_STATUSES = new Set([
   "PUBLISHED",
+  "INBOX_DELIVERED",
   "PARTIALLY_PUBLISHED",
   "FAILED",
   "CANCELLED",

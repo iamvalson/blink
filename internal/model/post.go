@@ -20,6 +20,7 @@ const (
 	StatusScheduled          = "SCHEDULED"
 	StatusQueued             = "QUEUED"
 	StatusPublishing         = "PUBLISHING"
+	StatusInboxDelivered     = "INBOX_DELIVERED"
 	StatusPublished          = "PUBLISHED"
 	StatusPartiallyPublished = "PARTIALLY_PUBLISHED"
 	StatusFailed             = "FAILED"
@@ -37,6 +38,11 @@ type CreatePostInput struct {
 	Targets       []uuid.UUID              `json:"targets"`
 	ContentFormat string                   `json:"content_format,omitempty"`
 	ScheduledAt   *time.Time               `json:"scheduled_at,omitempty"`
+}
+
+// IsTikTokInboxUpload identifies the single-target request shape that allows an empty caption.
+func (c CreatePostInput) IsTikTokInboxUpload() bool {
+	return len(c.Targets) == 1 && c.TikTokOptions[c.Targets[0].String()].SendToInbox
 }
 
 func (c *CreatePostInput) UnmarshalJSON(data []byte) error {
@@ -83,16 +89,17 @@ type Post struct {
 }
 
 type PostTargetDetail struct {
-	ID              uuid.UUID  `json:"id"`
-	SocialAccountID uuid.UUID  `json:"social_account_id"`
-	Platform        string     `json:"platform"`
-	PlatformUserID  string     `json:"platform_user_id"`
-	Status          string     `json:"status"`
-	PlatformPostID  *string    `json:"platform_post_id,omitempty"`
-	PlatformURL     *string    `json:"platform_url,omitempty"`
-	ErrorCode       *string    `json:"error_code,omitempty"`
-	ErrorMessage    *string    `json:"error_message,omitempty"`
-	PublishedAt     *time.Time `json:"published_at,omitempty"`
+	SendToTikTokInbox bool       `json:"send_to_tiktok_inbox,omitempty"`
+	ID                uuid.UUID  `json:"id"`
+	SocialAccountID   uuid.UUID  `json:"social_account_id"`
+	Platform          string     `json:"platform"`
+	PlatformUserID    string     `json:"platform_user_id"`
+	Status            string     `json:"status"`
+	PlatformPostID    *string    `json:"platform_post_id,omitempty"`
+	PlatformURL       *string    `json:"platform_url,omitempty"`
+	ErrorCode         *string    `json:"error_code,omitempty"`
+	ErrorMessage      *string    `json:"error_message,omitempty"`
+	PublishedAt       *time.Time `json:"published_at,omitempty"`
 }
 
 type PostWithDetails struct {

@@ -52,3 +52,10 @@ const retrying=renderToStaticMarkup(React.createElement(progressExports.Publishi
 assert.match(retrying,/TikTok retry scheduled:/);
 assert.match(retrying,/worker requires ffprobe/);
 console.log("Retry diagnostics UI: 2 rendered checks passed.");
+
+const inbox = renderToStaticMarkup(React.createElement(progressExports.PublishingProgress, {
+  post: { id: "post-id", status: "INBOX_DELIVERED", targets: [{ id: "target-id", platform: "tiktok", status: "INBOX_DELIVERED" }] },
+}));
+assert.match(inbox, /Sent to TikTok Inbox/);
+assert.match(inbox, /Open the notification in your TikTok Inbox/);
+assert.doesNotMatch(inbox, />Published</);

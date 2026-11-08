@@ -92,6 +92,11 @@ function StatusBadge({ status }: { status: string }) {
       className: "bg-amber-50 text-amber-700 border-amber-200",
       icon: Loader2,
     },
+    INBOX_DELIVERED: {
+      label: "Sent to TikTok Inbox",
+      className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      icon: CheckCircle2,
+    },
     PUBLISHED: {
       label: "Published",
       className: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -157,6 +162,8 @@ export function PublishingProgress({
     post.status === "PROCESSING";
   const isFailed = post.status === "FAILED" || post.status === "PARTIALLY_PUBLISHED";
   const isPublished = post.status === "PUBLISHED";
+  const isInboxDelivered = post.status === "INBOX_DELIVERED";
+  const isInboxUpload = post.targets?.some(target => target.send_to_tiktok_inbox);
 
   return (
     <div
@@ -164,8 +171,8 @@ export function PublishingProgress({
         "rounded-lg border p-4 space-y-4 text-sm",
         isActive && "border-amber-200 bg-amber-50/50",
         isFailed && "border-red-200 bg-red-50/50",
-        isPublished && "border-emerald-200 bg-emerald-50/50",
-        !isActive && !isFailed && !isPublished && "border-border bg-muted/30",
+        (isPublished || isInboxDelivered) && "border-emerald-200 bg-emerald-50/50",
+        !isActive && !isFailed && !isPublished && !isInboxDelivered && "border-border bg-muted/30",
       )}
     >
       <div className="flex items-center justify-between gap-3">
@@ -177,6 +184,10 @@ export function PublishingProgress({
         </div>
         <StatusBadge status={post.status} />
       </div>
+
+      {isInboxDelivered && (
+        <p>Open the notification in your TikTok Inbox to edit and post the video.</p>
+      )}
 
       {/* Per-target status */}
       {post.targets && post.targets.length > 0 && (
@@ -217,7 +228,7 @@ export function PublishingProgress({
       )}
 
       {post.targets?.filter(t => t.platform === "tiktok" && t.status === "UNKNOWN").map(t => <p key={t.id} role="alert" className="text-amber-800">{t.error_message || "TikTok publication needs manual review. Check TikTok before attempting another post."}</p>)}
-      {post.targets?.some(t => t.platform === "tiktok" && t.status === "PROCESSING") && <p role="status">TikTok is processing your video. Publication is awaiting confirmation.</p>}
+      {post.targets?.some(t => t.platform === "tiktok" && t.status === "PROCESSING") && <p role="status">{isInboxUpload ? "TikTok is processing your video for Inbox delivery." : "TikTok is processing your video. Publication is awaiting confirmation."}</p>}
       {post.targets?.filter(t => t.status === "RETRYING" && t.error_message).map(t => (
         <p key={t.id} role="status" className="text-amber-800">
           {platformDisplayName(t.platform)} retry scheduled: {t.error_message}
@@ -247,7 +258,7 @@ export function PublishingProgress({
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin shrink-0" />
           <span>
-            {post.status === "QUEUED"
+            {isInboxUpload ? "Sending to TikTok Inbox…" : post.status === "QUEUED"
               ? "Waiting to publish…"
               : "Uploading and publishing…"}
           </span>

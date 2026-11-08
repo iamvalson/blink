@@ -109,16 +109,17 @@ func recomputePostStatusTx(
 		return nil
 	}
 
-	var total, published, failed, cancelled int
+	var total, published, delivered, failed, cancelled int
 	err := tx.QueryRow(ctx, `
 		SELECT
 			COUNT(*),
 			COUNT(*) FILTER (WHERE status = 'PUBLISHED'),
+			COUNT(*) FILTER (WHERE status = 'INBOX_DELIVERED'),
 			COUNT(*) FILTER (WHERE status = 'FAILED'),
 			COUNT(*) FILTER (WHERE status = 'CANCELLED')
 		FROM post_targets
 		WHERE post_id = $1
-	`, postID).Scan(&total, &published, &failed, &cancelled)
+	`, postID).Scan(&total, &published, &delivered, &failed, &cancelled)
 	if err != nil {
 		return err
 	}
@@ -128,6 +129,8 @@ func recomputePostStatusTx(
 
 	status := "PUBLISHING"
 	switch {
+	case delivered == total:
+		status = model.StatusInboxDelivered
 	case published == total:
 		status = "PUBLISHED"
 	case published+failed+cancelled == total && published > 0:
@@ -297,7 +300,8 @@ func (r *PublicationRepository) QueueReconciliation(
 	return nil
 }
 
-// MarkPostTargetPublished updates the target and parent status atomically.
+// MarkPostTargetPublished finalizes the successful target and parent atomically.
+// Inbox uploads have a distinct terminal status and no publication timestamp.
 func (r *PublicationRepository) MarkPostTargetPublished(
 	ctx context.Context,
 	targetID uuid.UUID,
@@ -311,8 +315,9 @@ func (r *PublicationRepository) MarkPostTargetPublished(
 	var postID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		UPDATE post_targets
-		SET status = 'PUBLISHED'
-		WHERE id = $1 AND status IN ('PENDING', 'PUBLISHED')
+		SET status = CASE WHEN tiktok_options->>'send_to_inbox' = 'true'
+                          THEN 'INBOX_DELIVERED' ELSE 'PUBLISHED' END
+		WHERE id = $1 AND status IN ('PENDING', 'PUBLISHED', 'INBOX_DELIVERED')
 		RETURNING post_id
 	`, targetID).Scan(&postID)
 	if err != nil {

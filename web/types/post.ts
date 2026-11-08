@@ -33,6 +33,7 @@ export interface MediaUploadResponse {
 }
 
 export interface PostTarget {
+  send_to_tiktok_inbox?: boolean;
   id: string;
   social_account_id: string;
   platform: string;

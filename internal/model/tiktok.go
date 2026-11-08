@@ -7,6 +7,7 @@ import (
 
 // TikTokOptions records the creator's explicit choices for one target account.
 type TikTokOptions struct {
+	SendToInbox        bool    `json:"send_to_inbox,omitempty"`
 	CommercialContent  bool    `json:"commercial_content"`
 	PrivacyLevel       string  `json:"privacy_level"`
 	DisableComment     bool    `json:"disable_comment"`
@@ -20,6 +21,12 @@ type TikTokOptions struct {
 }
 
 func (o TikTokOptions) Validate() error {
+	if o.SendToInbox {
+		if !o.Consent {
+			return errors.New("TikTok Inbox upload requires explicit consent")
+		}
+		return nil
+	}
 	if o.CommercialContent && !o.BrandContentToggle && !o.BrandOrganicToggle {
 		return errors.New("TikTok commercial content requires a disclosure selection")
 	}

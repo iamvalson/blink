@@ -56,7 +56,8 @@ export function PostDetails({ id }: { id: string }) {
     return <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">{back}<div role="alert" className="rounded-xl border px-4 py-10 text-center sm:p-12"><h1 className="text-xl font-semibold">{missing ? "Post not found" : "Could not load post"}</h1><p className="mb-5 mt-2 text-sm text-muted-foreground">{missing ? "This post may have been deleted or is no longer available." : "Please try loading the post again."}</p>{!missing && <Button variant="outline" onClick={() => postQuery.refetch()}>Try again</Button>}</div></div>;
   }
   const post = postQuery.data;
-  const canReschedule = post.status === "SCHEDULED" || post.status === "QUEUED";
+  const canReschedule = (post.status === "SCHEDULED" || post.status === "QUEUED") &&
+    !post.targets?.some(target => target.send_to_tiktok_inbox);
   const canDelete = !["QUEUED", "PUBLISHING", "PROCESSING"].includes(post.status);
   const canRetry = post.status === "FAILED" || post.status === "PARTIALLY_PUBLISHED";
   const needsReconnect = post.targets?.some(target => target.error_code === "ACCOUNT_RECONNECT_REQUIRED" || /invalid_grant|refresh token is invalid or revoked/i.test(target.error_message ?? ""));

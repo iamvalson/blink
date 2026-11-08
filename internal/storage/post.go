@@ -90,7 +90,8 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			pa.platform_url,
 			pa.error_code,
 			pa.error_message,
-			pa.completed_at
+			CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
 		FROM post_targets pt
 		JOIN social_accounts sa ON sa.id = pt.social_account_id
 		LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -115,7 +116,7 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			&target.PlatformURL,
 			&target.ErrorCode,
 			&target.ErrorMessage,
-			&target.PublishedAt,
+			&target.PublishedAt, &target.SendToTikTokInbox,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan post target: %w", err)
@@ -221,7 +222,8 @@ func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
 				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
-				pa.error_message, pa.completed_at
+				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
 			LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -246,7 +248,7 @@ func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter
 			if err := targetRows.Scan(
 				&t.ID, &postID, &t.SocialAccountID, &t.Platform, &t.PlatformUserID,
 				&t.Status, &t.PlatformPostID, &t.PlatformURL, &t.ErrorCode,
-				&t.ErrorMessage, &t.PublishedAt,
+				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox,
 			); err != nil {
 				return nil, 0, fmt.Errorf("scan list target: %w", err)
 			}
@@ -503,6 +505,12 @@ func (r *PostRepository) CreatePost(
 			return nil, fmt.Errorf("validate social account: %w", err)
 		}
 		targetPlatforms = append(targetPlatforms, platform)
+	}
+
+	for targetID, options := range input.TikTokOptions {
+		if options.SendToInbox && (!input.IsTikTokInboxUpload() || input.Targets[0].String() != targetID || targetPlatforms[0] != "tiktok" || input.ScheduledAt != nil) {
+			return nil, errors.New("TikTok Inbox uploads must be sent immediately to a single TikTok account")
+		}
 	}
 
 	// Reject blob: URLs and unauthenticated remote URLs
@@ -1026,12 +1034,15 @@ func (r *PostRepository) ReschedulePost(ctx context.Context, userID, postID uuid
 
 	var currentStatus string
 	var currentGen int
+	var sendToInbox bool
 	err = tx.QueryRow(ctx, `
-		SELECT status, scheduling_generation
-		FROM posts
-		WHERE id = $1 AND user_id = $2
+		SELECT p.status, p.scheduling_generation,
+		       EXISTS (SELECT 1 FROM post_targets pt
+		               WHERE pt.post_id = p.id AND pt.tiktok_options->>'send_to_inbox' = 'true')
+		FROM posts p
+		WHERE p.id = $1 AND p.user_id = $2
 		FOR UPDATE
-	`, postID, userID).Scan(&currentStatus, &currentGen)
+	`, postID, userID).Scan(&currentStatus, &currentGen, &sendToInbox)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrPostNotFound
@@ -1040,8 +1051,8 @@ func (r *PostRepository) ReschedulePost(ctx context.Context, userID, postID uuid
 	}
 
 	// Reject if post is actively publishing or already published
-	if currentStatus != model.StatusScheduled &&
-		currentStatus != model.StatusQueued {
+	if sendToInbox || (currentStatus != model.StatusScheduled &&
+		currentStatus != model.StatusQueued) {
 		return nil, ErrPostCannotBeRescheduled
 	}
 
@@ -1212,7 +1223,8 @@ func (r *PostRepository) ListCalendarPosts(ctx context.Context, userID uuid.UUID
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
 				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
-				pa.error_message, pa.completed_at
+				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
 			LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -1236,7 +1248,7 @@ func (r *PostRepository) ListCalendarPosts(ctx context.Context, userID uuid.UUID
 			if err := targetRows.Scan(
 				&t.ID, &postID, &t.SocialAccountID, &t.Platform, &t.PlatformUserID,
 				&t.Status, &t.PlatformPostID, &t.PlatformURL, &t.ErrorCode,
-				&t.ErrorMessage, &t.PublishedAt,
+				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox,
 			); err != nil {
 				return nil, fmt.Errorf("scan calendar target: %w", err)
 			}
@@ -1318,7 +1330,8 @@ func (r *PostRepository) ListUpcomingPosts(ctx context.Context, userID uuid.UUID
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
 				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
-				pa.error_message, pa.completed_at
+				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
 			LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -1342,7 +1355,7 @@ func (r *PostRepository) ListUpcomingPosts(ctx context.Context, userID uuid.UUID
 			if err := targetRows.Scan(
 				&t.ID, &postID, &t.SocialAccountID, &t.Platform, &t.PlatformUserID,
 				&t.Status, &t.PlatformPostID, &t.PlatformURL, &t.ErrorCode,
-				&t.ErrorMessage, &t.PublishedAt,
+				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox,
 			); err != nil {
 				return nil, 0, fmt.Errorf("scan upcoming target: %w", err)
 			}
