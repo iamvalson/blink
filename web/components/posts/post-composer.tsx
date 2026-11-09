@@ -16,6 +16,8 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 
 import { MediaUploader, type MediaFile } from "./media-uploader";
@@ -35,6 +37,19 @@ import {
   validateXMediaConstraints,
   xMediaKind,
 } from "@/features/posts/utils/x-media-validator";
+
+const captionSettings: Record<Platform, { name: string; limit: number }> = {
+  twitter: { name: "X", limit: 280 },
+  tiktok: { name: "TikTok", limit: 2200 },
+  youtube: { name: "YouTube", limit: 5000 },
+};
+
+function captionError(platform: Platform, caption: string) {
+  const { name, limit } = captionSettings[platform];
+  if (!caption.trim()) return `Add a caption for ${name}.`;
+  if (caption.trim().length > limit) return `${name} captions can contain up to ${limit} characters.`;
+  return null;
+}
 
 type SubmitPhase =
   | "idle"
@@ -66,6 +81,9 @@ export function PostComposer() {
 
   const [composerView, setComposerView] = useState<"write" | "preview">("write");
   const [caption, setCaption] = useState("");
+  const [captionOverrides, setCaptionOverrides] = useState<Partial<Record<Platform, string>>>({});
+  const [captionEditor, setCaptionEditor] = useState<{ platform: Platform; text: string } | null>(null);
+  const [previewPlatform, setPreviewPlatform] = useState<Platform | null>(null);
   const [tikTokInboxAccount, setTikTokInboxAccount] = useState("");
   const [tikTokInboxConsentMedia, setTikTokInboxConsentMedia] = useState<string | null>(null);
   const [tikTokAccount, setTikTokAccount] = useState("");
@@ -137,6 +155,26 @@ export function PostComposer() {
   const tikTokAccountID = tikTokAccounts.some(a => a.id === tikTokAccount) ? tikTokAccount : (tikTokAccounts[0]?.id ?? "");
   const canSendToTikTokInbox = isTikTokSelected && resolvedSelectedPlatforms.length === 1 && Boolean(tikTokAccountID);
   const sendToTikTokInbox = canSendToTikTokInbox && tikTokInboxAccount === tikTokAccountID;
+  const selectedTargets = resolvedSelectedPlatforms.flatMap((platform) => {
+    const account = connectedAccounts.find((account) =>
+      platform === "tiktok" ? account.id === tikTokAccountID : account.platform === platform,
+    );
+    return account ? [{ platform, id: account.id }] : [];
+  });
+  const targets = selectedTargets.map(({ id }) => id);
+  const captionOverridesPayload: Record<string, string> = {};
+  for (const { id, platform } of selectedTargets) {
+    const override = captionOverrides[platform];
+    if (!sendToTikTokInbox && override !== undefined) captionOverridesPayload[id] = override.trim();
+  }
+  const captionErrors = sendToTikTokInbox ? [] : selectedTargets.flatMap(({ platform }) => {
+    const error = captionError(platform, captionOverrides[platform] ?? caption);
+    return error ? [{ platform, error }] : [];
+  });
+  const activePreview = previewPlatform && resolvedSelectedPlatforms.includes(previewPlatform)
+    ? previewPlatform
+    : resolvedSelectedPlatforms[0];
+
   const creatorQuery = useQuery({queryKey:["tiktok-creator",tikTokAccountID],queryFn:()=>getTikTokCreatorInfo(tikTokAccountID),enabled:isTikTokSelected && Boolean(tikTokAccountID) && !sendToTikTokInbox,staleTime:0,refetchOnMount:"always",retry:false});
   const tikTokOptions = effectiveTikTokOptions(
     { ...emptyTikTokOptions, ...tikTokChoices[tikTokAccountID], duration_seconds: videoMetadata?.duration ?? 0 },
@@ -161,7 +199,7 @@ export function PostComposer() {
     } else if (!sendToTikTokInbox && creatorQuery.isError) {
       tikTokError = "TikTok creator settings could not be loaded. Refresh to try again.";
     } else {
-      tikTokError = validateTikTokPost(selectedTikTokOptions, creatorQuery.data, tikTokMedia, videoMetadata, caption);
+      tikTokError = validateTikTokPost(selectedTikTokOptions, creatorQuery.data, tikTokMedia, videoMetadata, (captionOverrides.tiktok ?? caption).trim());
     }
   }
   const tikTokPayload = isTikTokSelected ? { [tikTokAccountID]: selectedTikTokOptions } : undefined;
@@ -186,15 +224,6 @@ export function PostComposer() {
     if (hasPhoto && media.length >= 4) return "X allows at most 4 photos per post.";
     return null;
   }, [isXSelected, media]);
-
-  const characterLimit = useMemo(() => {
-    if (resolvedSelectedPlatforms.includes("twitter")) {
-      return 280;
-    }
-    return resolvedSelectedPlatforms.includes("tiktok") ? 2200 : 5000;
-  }, [resolvedSelectedPlatforms]);
-
-  const charactersRemaining = characterLimit - caption.length;
 
   const hasUploadingMedia = useMemo(() => {
     return media.some((m) => m.uploadStatus === "uploading");
@@ -394,8 +423,8 @@ export function PostComposer() {
       return;
     }
 
-    if (!sendToTikTokInbox && !caption.trim()) {
-      toast.error("Add a caption before publishing.");
+    if (captionErrors.length > 0) {
+      toast.error(captionErrors[0].error);
       return;
     }
 
@@ -443,14 +472,6 @@ export function PostComposer() {
       return;
     }
 
-    const targets = resolvedSelectedPlatforms
-      .map(
-        (platform) =>
-          (platform === "tiktok" ? connectedAccounts.find(account => account.id === tikTokAccountID) : connectedAccounts.find((account) => account.platform === platform))
-            ?.id,
-      )
-      .filter((target): target is string => Boolean(target));
-
     if (targets.length === 0) {
       toast.error("No connected account is available for the selected platforms.");
       return;
@@ -475,6 +496,7 @@ export function PostComposer() {
       const post = await createPost({
         caption: sendToTikTokInbox ? "" : caption.trim(),
         targets,
+        caption_overrides: Object.keys(captionOverridesPayload).length ? captionOverridesPayload : undefined,
         media_id: primaryMediaId,
         media_ids: mediaIds.length > 0 ? mediaIds : null,
         content_format: contentFormat,
@@ -519,8 +541,8 @@ export function PostComposer() {
       toast.error("Connect a social account before scheduling.");
       return;
     }
-    if (!caption.trim()) {
-      toast.error("Add a caption before scheduling.");
+    if (captionErrors.length > 0) {
+      toast.error(captionErrors[0].error);
       return;
     }
     if (resolvedSelectedPlatforms.length === 0) {
@@ -563,13 +585,6 @@ export function PostComposer() {
       return;
     }
 
-    const targets = resolvedSelectedPlatforms
-      .map(
-        (platform) =>
-          (platform === "tiktok" ? connectedAccounts.find(account => account.id === tikTokAccountID) : connectedAccounts.find((account) => account.platform === platform))?.id,
-      )
-      .filter((target): target is string => Boolean(target));
-
     if (targets.length === 0) {
       toast.error("No connected account is available for the selected platforms.");
       return;
@@ -593,6 +608,7 @@ export function PostComposer() {
       const post = await createPost({
         caption: caption.trim(),
         targets,
+        caption_overrides: Object.keys(captionOverridesPayload).length ? captionOverridesPayload : undefined,
         media_id: primaryMediaId,
         media_ids: mediaIds.length > 0 ? mediaIds : null,
         content_format: contentFormat,
@@ -623,6 +639,8 @@ export function PostComposer() {
     setValidatingFileName(undefined);
     media.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     setCaption("");
+    setCaptionOverrides({});
+    setPreviewPlatform(null);
     setSelectedPlatforms([]);
     setMedia([]);
     setYoutubeFormat("VIDEO");
@@ -765,32 +783,51 @@ export function PostComposer() {
             <Separator />
 
             {!sendToTikTokInbox && <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label htmlFor="post-caption" className="text-sm font-medium">
-                  {isYouTubeSelected ? "Title / Caption" : "Caption"}
-                </label>
-
-                <span
-                  className={`text-xs ${
-                    charactersRemaining < 0
-                      ? "text-destructive"
-                      : "text-muted-foreground"
-                  }`}
-                >
-                  {charactersRemaining} characters left
-                </span>
-              </div>
+              <label htmlFor="post-caption" className="text-sm font-medium">Shared caption</label>
+              <p className="text-xs text-muted-foreground">
+                Used by every selected platform that follows the shared caption.
+              </p>
 
               <textarea
                 id="post-caption"
                 value={caption}
                 onChange={(event) => setCaption(event.target.value)}
                 placeholder="What do you want to share?"
-                maxLength={characterLimit}
                 rows={9}
                 disabled={isDisabled}
                 className="w-full resize-none rounded-lg border bg-background px-3 py-3 text-base outline-none sm:px-4 sm:text-sm transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
               />
+              {selectedTargets.map(({ platform }) => {
+                const { name, limit } = captionSettings[platform];
+                const override = captionOverrides[platform];
+                const count = (override ?? caption).trim().length;
+                const error = captionErrors.find((entry) => entry.platform === platform)?.error;
+
+                return (
+                  <div key={platform} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-sm font-medium">{name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {override === undefined ? "Uses shared caption" : "Custom caption"} · {count}/{limit}
+                      </p>
+                      {count > 0 && error && <p className="text-xs text-destructive">{error}</p>}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Edit caption for ${name}`}
+                      disabled={isDisabled}
+                      onClick={() => {
+                        setCaptionEditor({ platform, text: override ?? caption });
+                        setPreviewPlatform(platform);
+                      }}
+                    >
+                      Edit caption
+                    </Button>
+                  </div>
+                );
+              })}
             </div>}
 
             {/* Media uploader */}
@@ -873,7 +910,7 @@ export function PostComposer() {
                 variant="outline"
                 onClick={() => setScheduleOpen(true)}
                 className="min-h-11 flex-1 sm:flex-none"
-                disabled={isDisabled || sendToTikTokInbox || Boolean(tikTokError)}
+                disabled={isDisabled || sendToTikTokInbox || Boolean(tikTokError) || captionErrors.length > 0}
               >
                 <CalendarClock className="mr-2 h-4 w-4" />
                 Schedule
@@ -885,9 +922,8 @@ export function PostComposer() {
                 disabled={
                   isDisabled ||
                   isRetrying ||
-                  (phase !== "failed" && phase !== "partial" && Boolean(tikTokError)) ||
+                  (phase !== "failed" && phase !== "partial" && (Boolean(tikTokError) || captionErrors.length > 0)) ||
                   hasUploadingMedia ||
-                  (!sendToTikTokInbox && (!caption.trim() || charactersRemaining < 0)) ||
                   connectedAccounts.length === 0
                 }
                 className="min-h-11 flex-1 sm:flex-none"
@@ -900,13 +936,71 @@ export function PostComposer() {
         </Card>
 
         <div id="composer-preview" className={composerView === "write" ? "hidden min-w-0 xl:sticky xl:top-20 xl:block" : "min-w-0 xl:sticky xl:top-20"}>
+          {resolvedSelectedPlatforms.length > 1 && (
+            <div role="group" aria-label="Preview platform" className="mb-3 flex flex-wrap gap-2">
+              {resolvedSelectedPlatforms.map((platform) => (
+                <Button
+                  key={platform}
+                  type="button"
+                  size="sm"
+                  variant={activePreview === platform ? "default" : "outline"}
+                  aria-pressed={activePreview === platform}
+                  onClick={() => setPreviewPlatform(platform)}
+                >
+                  {captionSettings[platform].name}
+                </Button>
+              ))}
+            </div>
+          )}
           <PostPreview
-            caption={sendToTikTokInbox ? "" : caption}
+            caption={sendToTikTokInbox ? "" : (activePreview ? captionOverrides[activePreview] ?? caption : caption).trim()}
             media={media}
-            platforms={resolvedSelectedPlatforms}
+            platforms={activePreview ? [activePreview] : []}
           />
         </div>
       </div>
+
+      <Dialog open={captionEditor !== null} onOpenChange={(open) => { if (!open) setCaptionEditor(null); }}>
+        {captionEditor && (
+          <DialogContent style={{ maxWidth: "min(26rem, calc(100% - 2rem))" }}>
+            <DialogTitle>Edit caption for {captionSettings[captionEditor.platform].name}</DialogTitle>
+            <DialogDescription>
+              {captionEditor.platform === "youtube"
+                ? "YouTube uses the first line as the title and the rest as the description."
+                : "Changes here apply only to this platform."}
+            </DialogDescription>
+            <Textarea
+              aria-label="Custom caption"
+              rows={7}
+              value={captionEditor.text}
+              onChange={(event) => setCaptionEditor({ ...captionEditor, text: event.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              {captionEditor.text.trim().length}/{captionSettings[captionEditor.platform].limit}
+            </p>
+            <DialogFooter>
+              {captionOverrides[captionEditor.platform] !== undefined && (
+                <Button type="button" variant="outline" onClick={() => {
+                  setCaptionOverrides((current) => {
+                    const remaining = { ...current };
+                    delete remaining[captionEditor.platform];
+                    return remaining;
+                  });
+                  setCaptionEditor(null);
+                }}>
+                  Use shared caption
+                </Button>
+              )}
+              <Button type="button" disabled={Boolean(captionError(captionEditor.platform, captionEditor.text))} onClick={() => {
+                setCaptionOverrides((current) => ({ ...current, [captionEditor.platform]: captionEditor.text.trim() }));
+                setCaptionEditor(null);
+              }}>
+                Save caption
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
 
       <ScheduleDialog
         open={scheduleOpen}

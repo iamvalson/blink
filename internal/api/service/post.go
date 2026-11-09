@@ -53,9 +53,8 @@ func (s *PostService) CreatePost(
 		return nil, fmt.Errorf("%w: at least one target is required", ErrPostValidation)
 	}
 
-	// Validate input
-	if !input.IsTikTokInboxUpload() && (input.Caption == nil || *input.Caption == "") {
-		return nil, fmt.Errorf("%w: caption is required", ErrPostValidation)
+	if err := validateCaptionInput(input); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPostValidation, err)
 	}
 
 	for _, options := range input.TikTokOptions {
@@ -77,6 +76,34 @@ func (s *PostService) CreatePost(
 	return post, nil
 }
 
+func validateCaptionInput(input model.CreatePostInput) error {
+	if input.IsTikTokInboxUpload() {
+		if len(input.CaptionOverrides) > 0 {
+			return errors.New("add the caption in TikTok for Inbox uploads")
+		}
+		return nil
+	}
+
+	selected := make(map[string]struct{}, len(input.Targets))
+	for _, id := range input.Targets {
+		key := id.String()
+		selected[key] = struct{}{}
+		caption, overridden := input.CaptionOverrides[key]
+		if !overridden && input.Caption != nil {
+			caption = *input.Caption
+		}
+		if strings.TrimSpace(caption) == "" {
+			return errors.New("caption is required for every selected account")
+		}
+	}
+	for id := range input.CaptionOverrides {
+		if _, ok := selected[id]; !ok {
+			return errors.New("caption overrides must reference selected accounts")
+		}
+	}
+	return nil
+}
+
 // isStorageValidationError returns true for errors that originate from
 // business-rule or data-validation checks in the storage layer and should
 // therefore be surfaced to the caller as a 400 Bad Request.
@@ -85,7 +112,7 @@ func isStorageValidationError(err error) bool {
 		return true
 	}
 	// Explicit sentinel errors defined in storage
-	if errors.Is(err, storage.ErrInvalidScheduledTime) {
+	if errors.Is(err, storage.ErrInvalidScheduledTime) || errors.Is(err, storage.ErrInvalidCaption) {
 		return true
 	}
 	// The storage layer returns plain fmt.Errorf strings for platform-specific

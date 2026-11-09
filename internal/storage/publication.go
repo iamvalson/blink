@@ -162,7 +162,7 @@ func (r *PublicationRepository) GetPendingPostTargets(ctx context.Context, postI
 	rows, err := r.db.Query(
 		ctx,
 		`
-            SELECT id, post_id, social_account_id, status, created_at
+            SELECT id, post_id, social_account_id, status, created_at, caption_override
             FROM post_targets
             WHERE post_id = $1 AND status = 'PENDING'
         `,
@@ -176,7 +176,7 @@ func (r *PublicationRepository) GetPendingPostTargets(ctx context.Context, postI
 	var targets []model.PostTarget
 	for rows.Next() {
 		var target model.PostTarget
-		if err := rows.Scan(&target.ID, &target.PostID, &target.SocialAccountID, &target.Status, &target.CreatedAt); err != nil {
+		if err := rows.Scan(&target.ID, &target.PostID, &target.SocialAccountID, &target.Status, &target.CreatedAt, &target.CaptionOverride); err != nil {
 			return nil, fmt.Errorf("scan post target: %w", err)
 		}
 		targets = append(targets, target)
@@ -372,7 +372,7 @@ func (r *PublicationRepository) GetPostTargetWithSocialAccount(
 	err := r.db.QueryRow(
 		ctx,
 		`
-            SELECT pt.id, pt.post_id, pt.social_account_id, pt.status, pt.created_at,
+            SELECT pt.id, pt.post_id, pt.social_account_id, pt.status, pt.created_at, pt.caption_override,
                    sa.id, sa.user_id, sa.platform, sa.platform_user_id, sa.access_token,
                    sa.refresh_token, sa.expires_at, sa.created_at
             FROM post_targets pt
@@ -381,7 +381,7 @@ func (r *PublicationRepository) GetPostTargetWithSocialAccount(
         `,
 		postTargetID,
 	).Scan(
-		&target.ID, &target.PostID, &target.SocialAccountID, &target.Status, &target.CreatedAt,
+		&target.ID, &target.PostID, &target.SocialAccountID, &target.Status, &target.CreatedAt, &target.CaptionOverride,
 		&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
 		&account.AccessToken, &account.RefreshToken, &account.ExpiresAt, &account.CreatedAt,
 	)

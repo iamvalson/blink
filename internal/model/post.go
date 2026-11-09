@@ -28,16 +28,17 @@ const (
 )
 
 type CreatePostInput struct {
-	TikTokOptions map[string]TikTokOptions `json:"tiktok_options,omitempty"`
-	Caption       *string                  `json:"caption"`
-	Title         *string                  `json:"title,omitempty"`
-	MediaURL      *string                  `json:"media_url"`
-	MediaType     *string                  `json:"media_type"`
-	MediaID       *uuid.UUID               `json:"media_id,omitempty"`
-	MediaIDs      []uuid.UUID              `json:"media_ids,omitempty"`
-	Targets       []uuid.UUID              `json:"targets"`
-	ContentFormat string                   `json:"content_format,omitempty"`
-	ScheduledAt   *time.Time               `json:"scheduled_at,omitempty"`
+	CaptionOverrides map[string]string        `json:"caption_overrides,omitempty"`
+	TikTokOptions    map[string]TikTokOptions `json:"tiktok_options,omitempty"`
+	Caption          *string                  `json:"caption"`
+	Title            *string                  `json:"title,omitempty"`
+	MediaURL         *string                  `json:"media_url"`
+	MediaType        *string                  `json:"media_type"`
+	MediaID          *uuid.UUID               `json:"media_id,omitempty"`
+	MediaIDs         []uuid.UUID              `json:"media_ids,omitempty"`
+	Targets          []uuid.UUID              `json:"targets"`
+	ContentFormat    string                   `json:"content_format,omitempty"`
+	ScheduledAt      *time.Time               `json:"scheduled_at,omitempty"`
 }
 
 // IsTikTokInboxUpload identifies the single-target request shape that allows an empty caption.
@@ -89,6 +90,7 @@ type Post struct {
 }
 
 type PostTargetDetail struct {
+	CaptionOverride   *string    `json:"caption_override,omitempty"`
 	SendToTikTokInbox bool       `json:"send_to_tiktok_inbox,omitempty"`
 	ID                uuid.UUID  `json:"id"`
 	SocialAccountID   uuid.UUID  `json:"social_account_id"`

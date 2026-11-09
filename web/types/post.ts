@@ -4,6 +4,7 @@ export type ContentFormat = "VIDEO" | "SHORT";
 export interface CreatePostRequest {
   tiktok_options?: Record<string, TikTokOptions>;
   caption: string;
+  caption_overrides?: Record<string, string>;
   targets: string[];
   media_url?: string | null;
   media_type?: string | null;
@@ -33,6 +34,7 @@ export interface MediaUploadResponse {
 }
 
 export interface PostTarget {
+  caption_override?: string;
   send_to_tiktok_inbox?: boolean;
   id: string;
   social_account_id: string;

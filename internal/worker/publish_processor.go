@@ -357,10 +357,7 @@ func (p *PublishProcessor) publishToTarget(
 	}
 
 	// Publish
-	caption := ""
-	if post.Caption != nil {
-		caption = *post.Caption
-	}
+	caption := target.CaptionForPost(post)
 	start := time.Now()
 	contextLogger.Info().Str("event", "publish_started").Str("status", "started").Msg("publishing to platform")
 

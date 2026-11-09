@@ -7,11 +7,22 @@ import (
 )
 
 type PostTarget struct {
+	CaptionOverride *string   `json:"caption_override,omitempty"`
 	ID              uuid.UUID `json:"id"`
 	PostID          uuid.UUID `json:"post_id"`
 	SocialAccountID uuid.UUID `json:"social_account_id"`
 	Status          string    `json:"status"` // PENDING, PUBLISHING, PUBLISHED, FAILED, CANCELLED
 	CreatedAt       time.Time `json:"created_at"`
+}
+
+func (target PostTarget) CaptionForPost(post *Post) string {
+	if target.CaptionOverride != nil {
+		return *target.CaptionOverride
+	}
+	if post.Caption != nil {
+		return *post.Caption
+	}
+	return ""
 }
 
 type PublicationAttempt struct {

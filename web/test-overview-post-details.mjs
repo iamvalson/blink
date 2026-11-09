@@ -89,6 +89,14 @@ previewHtml = renderPreview({ ...post, media_id: "uploaded-image" });
 assert.match(previewHtml, /<img/);
 assert.match(previewHtml, /uploaded-image\/content/);
 assert.doesNotMatch(renderPreview(post), /<video|<img|Your post caption will appear/);
+const customizedPreview = renderPreview({
+  ...post,
+  targets: [{ ...post.targets[0], caption_override: "Custom YouTube title\nCustom description" }],
+});
+assert.match(customizedPreview, /<h3[^>]*>Custom YouTube title<\/h3>/);
+assert.match(customizedPreview, /Custom description/);
+assert.doesNotMatch(customizedPreview, /Launch update|A post with full details/);
+
 previewHtml = renderPreview({ ...post, targets: [...post.targets, { id: "target-2", platform: "twitter", platform_user_id: "another-creator" }] });
 assert.match(previewHtml, /aria-label="Preview platform"/);
 assert.match(previewHtml, /aria-pressed="true"/);

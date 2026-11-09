@@ -49,8 +49,8 @@ export function PostDetailsPreview({ post }: { post: PostResponse }) {
       )}
       <PostPreview
         saved
-        title={post.title}
-        caption={post.caption ?? ""}
+        title={account?.caption_override === undefined ? post.title : undefined}
+        caption={account?.caption_override ?? post.caption ?? ""}
         media={attachments}
         platforms={platform ? [platform] : []}
         accountName={account?.platform_user_id}

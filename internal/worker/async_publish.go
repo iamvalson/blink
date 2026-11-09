@@ -206,10 +206,7 @@ func (p *PublishProcessor) publishAsyncVideo(ctx context.Context, post *model.Po
 	}
 	contextLogger.Info().Str("event", "tiktok_media_validated").Float64("duration_seconds", duration).Msg("TikTok video validation passed")
 	options.DurationSeconds = duration
-	caption := ""
-	if post.Caption != nil {
-		caption = *post.Caption
-	}
+	caption := target.CaptionForPost(post)
 	input := connectors.VideoPublishInput{Caption: caption, MediaURL: p.deliverySigner.URL(media.ID, time.Now()), Options: options}
 	token, _, err := p.ensureAccessToken(ctx, account, connector)
 	if err != nil {
