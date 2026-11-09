@@ -23,8 +23,6 @@ func NewOAuthConfig(cfg YouTubeConfig) *oauth2.Config {
 		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  cfg.CallbackURL,
 		Scopes: []string{
-			"https://www.googleapis.com/auth/youtube.upload",
-			"https://www.googleapis.com/auth/youtube.readonly",
 			"https://www.googleapis.com/auth/youtube",
 		},
 		Endpoint: googleOAuthEndpoint,

@@ -85,11 +85,8 @@ func TestGetAuthURL_Parameters(t *testing.T) {
 		t.Errorf("expected consent prompt parameter in %s", authURL)
 	}
 
-	scope := q.Get("scope")
-	for _, expectedScope := range oauthCfg.Scopes {
-		if !strings.Contains(scope, expectedScope) {
-			t.Errorf("missing scope %s in auth URL", expectedScope)
-		}
+	if scope := q.Get("scope"); scope != "https://www.googleapis.com/auth/youtube" {
+		t.Errorf("scope = %q, want only https://www.googleapis.com/auth/youtube", scope)
 	}
 }
 
