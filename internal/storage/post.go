@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
 	"github.com/iamvalson/blink/internal/model"
@@ -17,6 +18,7 @@ import (
 )
 
 var (
+	ErrInvalidCaption          = errors.New("invalid caption")
 	ErrPostNotFound            = errors.New("post not found")
 	ErrPostDeleteForbidden     = errors.New("post cannot be deleted while publishing is in progress")
 	ErrPostCannotBeRescheduled = errors.New("post cannot be rescheduled in its current status")
@@ -91,7 +93,7 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			pa.error_code,
 			pa.error_message,
 			CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
-				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
 		FROM post_targets pt
 		JOIN social_accounts sa ON sa.id = pt.social_account_id
 		LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -116,7 +118,7 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			&target.PlatformURL,
 			&target.ErrorCode,
 			&target.ErrorMessage,
-			&target.PublishedAt, &target.SendToTikTokInbox,
+			&target.PublishedAt, &target.SendToTikTokInbox, &target.CaptionOverride,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan post target: %w", err)
@@ -223,7 +225,7 @@ func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
 				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
-				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
 			LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -248,7 +250,7 @@ func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter
 			if err := targetRows.Scan(
 				&t.ID, &postID, &t.SocialAccountID, &t.Platform, &t.PlatformUserID,
 				&t.Status, &t.PlatformPostID, &t.PlatformURL, &t.ErrorCode,
-				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox,
+				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox, &t.CaptionOverride,
 			); err != nil {
 				return nil, 0, fmt.Errorf("scan list target: %w", err)
 			}
@@ -513,6 +515,10 @@ func (r *PostRepository) CreatePost(
 		}
 	}
 
+	if err := validateTargetCaptionLengths(input, targetPlatforms); err != nil {
+		return nil, err
+	}
+
 	// Reject blob: URLs and unauthenticated remote URLs
 	if input.MediaURL != nil && *input.MediaURL != "" {
 		if strings.HasPrefix(*input.MediaURL, "blob:") {
@@ -758,6 +764,10 @@ func (r *PostRepository) CreatePost(
 	// Create post targets
 	for _, socialAccountID := range input.Targets {
 		var postTargetID uuid.UUID
+		var captionOverride *string
+		if caption, ok := input.CaptionOverrides[socialAccountID.String()]; ok {
+			captionOverride = &caption
+		}
 
 		err := tx.QueryRow(
 			ctx,
@@ -765,16 +775,19 @@ func (r *PostRepository) CreatePost(
 				INSERT INTO post_targets (
 					post_id,
 					social_account_id,
+					caption_override,
 					status
 				) VALUES (
 					$1,
 					$2,
+					$3,
 					'PENDING'
 				)
 				RETURNING id
 			`,
 			post.ID,
 			socialAccountID,
+			captionOverride,
 		).Scan(&postTargetID)
 
 		if err != nil {
@@ -987,27 +1000,56 @@ func (r *PostRepository) handleExistingIdempotencyKey(
 	return nil, errors.New("invalid idempotency state")
 }
 
+func validateTargetCaptionLengths(input model.CreatePostInput, platforms []string) error {
+	if input.IsTikTokInboxUpload() {
+		return nil
+	}
+
+	for i, id := range input.Targets {
+		caption, overridden := input.CaptionOverrides[id.String()]
+		if !overridden && input.Caption != nil {
+			caption = *input.Caption
+		}
+		platform := platforms[i]
+		var limit int
+		switch platform {
+		case "twitter":
+			limit = 280
+		case "tiktok":
+			limit = 2200
+		case "youtube":
+			limit = 5000
+		}
+		if limit > 0 && len(utf16.Encode([]rune(caption))) > limit {
+			return fmt.Errorf("%w: %s caption exceeds %d characters", ErrInvalidCaption, platform, limit)
+		}
+	}
+	return nil
+}
+
 func hashCreatePostRequest(input model.CreatePostInput) (string, error) {
 	data := struct {
-		TikTokOptions map[string]model.TikTokOptions `json:"tiktok_options,omitempty"`
-		Caption       *string                        `json:"caption"`
-		MediaURL      *string                        `json:"media_url"`
-		MediaType     *string                        `json:"media_type"`
-		MediaID       *uuid.UUID                     `json:"media_id,omitempty"`
-		MediaIDs      []uuid.UUID                    `json:"media_ids,omitempty"`
-		Targets       []uuid.UUID                    `json:"targets"`
-		ContentFormat string                         `json:"content_format"`
-		ScheduledAt   *time.Time                     `json:"scheduled_at,omitempty"`
+		CaptionOverrides map[string]string              `json:"caption_overrides,omitempty"`
+		TikTokOptions    map[string]model.TikTokOptions `json:"tiktok_options,omitempty"`
+		Caption          *string                        `json:"caption"`
+		MediaURL         *string                        `json:"media_url"`
+		MediaType        *string                        `json:"media_type"`
+		MediaID          *uuid.UUID                     `json:"media_id,omitempty"`
+		MediaIDs         []uuid.UUID                    `json:"media_ids,omitempty"`
+		Targets          []uuid.UUID                    `json:"targets"`
+		ContentFormat    string                         `json:"content_format"`
+		ScheduledAt      *time.Time                     `json:"scheduled_at,omitempty"`
 	}{
-		TikTokOptions: input.TikTokOptions,
-		Caption:       input.Caption,
-		MediaURL:      input.MediaURL,
-		MediaType:     input.MediaType,
-		MediaID:       input.MediaID,
-		MediaIDs:      input.MediaIDs,
-		Targets:       input.Targets,
-		ContentFormat: input.ContentFormat,
-		ScheduledAt:   input.ScheduledAt,
+		CaptionOverrides: input.CaptionOverrides,
+		TikTokOptions:    input.TikTokOptions,
+		Caption:          input.Caption,
+		MediaURL:         input.MediaURL,
+		MediaType:        input.MediaType,
+		MediaID:          input.MediaID,
+		MediaIDs:         input.MediaIDs,
+		Targets:          input.Targets,
+		ContentFormat:    input.ContentFormat,
+		ScheduledAt:      input.ScheduledAt,
 	}
 
 	encoded, err := json.Marshal(data)
@@ -1224,7 +1266,7 @@ func (r *PostRepository) ListCalendarPosts(ctx context.Context, userID uuid.UUID
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
 				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
-				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
 			LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -1248,7 +1290,7 @@ func (r *PostRepository) ListCalendarPosts(ctx context.Context, userID uuid.UUID
 			if err := targetRows.Scan(
 				&t.ID, &postID, &t.SocialAccountID, &t.Platform, &t.PlatformUserID,
 				&t.Status, &t.PlatformPostID, &t.PlatformURL, &t.ErrorCode,
-				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox,
+				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox, &t.CaptionOverride,
 			); err != nil {
 				return nil, fmt.Errorf("scan calendar target: %w", err)
 			}
@@ -1331,7 +1373,7 @@ func (r *PostRepository) ListUpcomingPosts(ctx context.Context, userID uuid.UUID
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
 				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
-				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false)
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
 			FROM post_targets pt
 			JOIN social_accounts sa ON sa.id = pt.social_account_id
 			LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -1355,7 +1397,7 @@ func (r *PostRepository) ListUpcomingPosts(ctx context.Context, userID uuid.UUID
 			if err := targetRows.Scan(
 				&t.ID, &postID, &t.SocialAccountID, &t.Platform, &t.PlatformUserID,
 				&t.Status, &t.PlatformPostID, &t.PlatformURL, &t.ErrorCode,
-				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox,
+				&t.ErrorMessage, &t.PublishedAt, &t.SendToTikTokInbox, &t.CaptionOverride,
 			); err != nil {
 				return nil, 0, fmt.Errorf("scan upcoming target: %w", err)
 			}

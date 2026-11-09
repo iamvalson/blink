@@ -56,12 +56,6 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Validate input
-	if !input.IsTikTokInboxUpload() && (input.Caption == nil || *input.Caption == "") {
-		http.Error(w, "caption is required", http.StatusBadRequest)
-		return
-	}
-
 	if len(input.Targets) == 0 {
 		http.Error(w, "at least one target is required", http.StatusBadRequest)
 		return
@@ -75,8 +69,7 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
 				Err(err).
 				Str("user_id", userID.String()).
 				Msg("Post creation rejected: validation error")
-			// Unwrap to surface the human-readable detail, not the sentinel wrapper.
-			http.Error(w, errors.Unwrap(err).Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 

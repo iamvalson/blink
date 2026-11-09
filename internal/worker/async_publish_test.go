@@ -64,6 +64,7 @@ func (s *asyncTestStore) MarkAttemptSucceeded(ctx context.Context, id uuid.UUID,
 type asyncTestConnector struct {
 	crashRecoveryConnector
 	initializations, polls int
+	initializedCaption     string
 	status                 string
 	initError, pollError   error
 	cancel                 context.CancelFunc
@@ -72,8 +73,9 @@ type asyncTestConnector struct {
 func (c *asyncTestConnector) ValidateVideo(context.Context, string, connectors.VideoPublishInput) error {
 	return nil
 }
-func (c *asyncTestConnector) InitializeVideo(context.Context, string, connectors.VideoPublishInput) (string, error) {
+func (c *asyncTestConnector) InitializeVideo(_ context.Context, _ string, input connectors.VideoPublishInput) (string, error) {
 	c.initializations++
+	c.initializedCaption = input.Caption
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -114,9 +116,13 @@ func asyncFixture(t *testing.T) (*PublishProcessor, *asyncTestStore, *asyncTestC
 func due(s *asyncTestStore) { past := time.Now().Add(-time.Second); s.op.NextCheckAt = &past }
 func TestAsyncPublishPersistsAndResumesAfterRestart(t *testing.T) {
 	p, s, c := asyncFixture(t)
+	s.target.CaptionOverride = stringPtr("custom TikTok caption")
 	ctx := context.Background()
 	if err := p.publishToTarget(ctx, s.post, &s.target); err != nil {
 		t.Fatal(err)
+	}
+	if c.initializedCaption != *s.target.CaptionOverride {
+		t.Fatalf("initialization received caption %q", c.initializedCaption)
 	}
 	if s.attempt.Status != "PROCESSING" || s.target.Status == "PUBLISHED" || s.op.PublishID == nil || s.queued != 1 {
 		t.Fatal("upload acceptance was not durably pending")

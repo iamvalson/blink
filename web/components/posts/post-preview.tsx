@@ -71,6 +71,10 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
   const previewPlatform = platforms[0] ?? "twitter";
   const platformName = previewPlatform === "twitter" ? "X" : previewPlatform === "tiktok" ? "TikTok" : "YouTube";
   const displayName = accountName || "Your account";
+  const [firstLine, ...remainingLines] = caption.split("\n");
+  const usesCaptionTitle = previewPlatform === "youtube" && (!title || title === firstLine.trim());
+  const displayTitle = usesCaptionTitle ? firstLine.trim() : title;
+  const displayCaption = usesCaptionTitle ? remainingLines.join("\n").trim() : caption;
 
   return (
     <Card className="overflow-hidden">
@@ -97,10 +101,10 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
             <MoreHorizontal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           </div>
           <div className="space-y-4 p-4">
-            {title && title !== caption.split("\n")[0]?.trim() && <h3 className="wrap-anywhere font-semibold">{title}</h3>}
-            {(caption || !saved) && (
+            {displayTitle && (usesCaptionTitle || displayTitle !== firstLine.trim()) && <h3 className="wrap-anywhere font-semibold">{displayTitle}</h3>}
+            {(displayCaption || (!saved && !displayTitle)) && (
               <p className="whitespace-pre-wrap wrap-anywhere text-sm leading-6">
-                {caption || <span className="text-muted-foreground">Your post caption will appear here...</span>}
+                {displayCaption || <span className="text-muted-foreground">Your post caption will appear here...</span>}
               </p>
             )}
             {media.length > 0 ? (
