@@ -1,64 +1,36 @@
 "use client";
 
-import { siX, siYoutube, siTiktok } from "simple-icons";
+import { siX, siYoutube, siTiktok, siInstagram } from "simple-icons";
 
-import type { Platform } from "@/types/platform";
+const icons = new Map([
+  ["twitter", siX],
+  ["youtube", siYoutube],
+  ["tiktok", siTiktok],
+  ["instagram", siInstagram],
+]);
 
 interface PlatformIconProps {
-  platform: Platform;
+  platform: string;
   size?: number;
   className?: string;
+  decorative?: boolean;
 }
 
-export function PlatformIcon({
-  platform,
-  size = 20,
-  className,
-}: PlatformIconProps) {
-  switch (platform) {
-    case "twitter":
-      return (
-        <svg
-          role="img"
-          viewBox="0 0 24 24"
-          width={size}
-          height={size}
-          className={className}
-          aria-label="X"
-        >
-          <path d={siX.path} />
-        </svg>
-      );
-
-    case "youtube":
-      return (
-        <svg
-          role="img"
-          viewBox="0 0 24 24"
-          width={size}
-          height={size}
-          className={className}
-          aria-label="YouTube"
-        >
-          <path d={siYoutube.path} />
-        </svg>
-      );
-
-    case "tiktok":
-      return (
-        <svg
-          role="img"
-          viewBox="0 0 24 24"
-          width={size}
-          height={size}
-          className={className}
-          aria-label="TikTok"
-        >
-          <path d={siTiktok.path} />
-        </svg>
-      );
-
-    default:
-      return null;
-  }
+export function PlatformIcon({ platform, size = 20, className, decorative = false }: PlatformIconProps) {
+  const icon = icons.get(platform);
+  if (!icon) return null;
+  return (
+    <svg
+      role={decorative ? undefined : "img"}
+      aria-hidden={decorative || undefined}
+      aria-label={decorative ? undefined : icon.title}
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+      className={className}
+    >
+      <path d={icon.path} />
+    </svg>
+  );
 }

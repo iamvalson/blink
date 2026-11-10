@@ -1,7 +1,11 @@
 import type { TikTokOptions } from "@/features/posts/utils/tiktok-validator";
 export type ContentFormat = "VIDEO" | "SHORT";
 
+export type InstagramFormat = "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
+
 export interface CreatePostRequest {
+  instagram_media_ids?: string[];
+  instagram_formats?: Record<string, InstagramFormat>;
   tiktok_options?: Record<string, TikTokOptions>;
   caption: string;
   caption_overrides?: Record<string, string>;
@@ -34,6 +38,9 @@ export interface MediaUploadResponse {
 }
 
 export interface PostTarget {
+  platform_avatar_url?: string;
+  platform_username?: string;
+  instagram_format?: InstagramFormat;
   caption_override?: string;
   send_to_tiktok_inbox?: boolean;
   id: string;
@@ -48,7 +55,14 @@ export interface PostTarget {
   published_at?: string;
 }
 
+export interface PostAttachment {
+  position: number;
+  media_id?: string;
+  content_type?: string;
+}
+
 export interface PostResponse {
+  instagram_media?: PostAttachment[];
   id: string;
   user_id: string;
   caption?: string;

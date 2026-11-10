@@ -24,7 +24,7 @@ func TestTrackedMigrationUpDoesNotReplay(t *testing.T) {
 		}
 	}
 	status, err := runner.Status()
-	if err != nil || status.Empty || status.Dirty || status.Version != 15 {
+	if err != nil || status.Empty || status.Dirty || status.Version != 18 {
 		t.Fatalf("invalid tracked version: %+v %v", status, err)
 	}
 	if postStatus(t, db, f.postID) != "QUEUED" {
@@ -46,7 +46,7 @@ func TestTrackedMigrationDownRevertsOnlyLatest(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := runner.Status()
-	if err != nil || status.Version != 14 || status.Dirty {
+	if err != nil || status.Version != 17 || status.Dirty {
 		t.Fatalf("down was not one step: %+v %v", status, err)
 	}
 	var postsExist bool
@@ -72,7 +72,7 @@ func TestUntrackedExistingSchemaRequiresExplicitBaseline(t *testing.T) {
 	if err := runner.Baseline(999); err == nil {
 		t.Fatal("unknown baseline accepted")
 	}
-	if err := runner.Baseline(15); err != nil {
+	if err := runner.Baseline(18); err != nil {
 		t.Fatal(err)
 	}
 	if err := runner.Up(); err != nil {
@@ -124,7 +124,7 @@ func TestBaselineRefusesSchemaDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runner.Close()
-	if err := runner.Baseline(15); err == nil {
+	if err := runner.Baseline(18); err == nil {
 		t.Fatal("baseline accepted schema drift")
 	}
 	status, err := runner.Status()
@@ -135,7 +135,7 @@ func TestBaselineRefusesSchemaDrift(t *testing.T) {
 	if err := runner.Baseline(10); err == nil {
 		t.Fatal("baseline accepted wrong migration version")
 	}
-	if err := runner.Baseline(15); err != nil {
+	if err := runner.Baseline(18); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -172,7 +172,7 @@ func TestConcurrentTrackedMigrationCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := second.Status()
-	if err != nil || status.Version != 15 || status.Dirty {
+	if err != nil || status.Version != 18 || status.Dirty {
 		t.Fatalf("concurrent commands corrupted tracking: %+v %v", status, err)
 	}
 }

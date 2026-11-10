@@ -9,8 +9,11 @@ type AuthParams struct {
 }
 
 type AuthResult struct {
-	PlatformUserID string
-	AccessToken    string
-	RefreshToken   string
-	Expiry         time.Time
+	AvatarURL       string
+	ProviderSubject string
+	Username        string
+	PlatformUserID  string
+	AccessToken     string
+	RefreshToken    string
+	Expiry          time.Time
 }

@@ -262,3 +262,58 @@ func (c *Connector) RefreshToken(ctx context.Context, refreshToken string) (conn
 
 	return result, nil
 }
+
+const tiktokUserInfoURL = "https://open.tiktokapis.com/v2/user/info/"
+
+// connectedAccountProfile uses only fields covered by the scopes already granted.
+// Profile lookup is optional so a transient error cannot block a connection.
+func connectedAccountProfile(ctx context.Context, client *http.Client, token *oauth2.Token, openID string) (name, avatarURL string) {
+	scope, _ := token.Extra("scope").(string)
+	granted := make(map[string]bool)
+	for _, value := range strings.Split(scope, ",") {
+		granted[strings.TrimSpace(value)] = true
+	}
+	if !granted["user.info.basic"] {
+		return "", ""
+	}
+
+	fields := "open_id,display_name,avatar_url"
+	if granted["user.info.profile"] {
+		fields += ",username"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tiktokUserInfoURL+"?"+url.Values{"fields": {fields}}.Encode(), nil)
+	if err != nil {
+		return "", ""
+	}
+	token.SetAuthHeader(req)
+	response, err := client.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", ""
+	}
+
+	var profile struct {
+		Data struct {
+			User struct {
+				OpenID      string `json:"open_id"`
+				DisplayName string `json:"display_name"`
+				Username    string `json:"username"`
+				AvatarURL   string `json:"avatar_url"`
+			} `json:"user"`
+		} `json:"data"`
+		Error TikTokAPIError `json:"error"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, maxSuccessResponseBytes)).Decode(&profile) != nil ||
+		profile.Error.Code != "ok" || profile.Data.User.OpenID != openID {
+		return "", ""
+	}
+	if granted["user.info.profile"] && strings.TrimSpace(profile.Data.User.Username) != "" {
+		return profile.Data.User.Username, profile.Data.User.AvatarURL
+	}
+	return profile.Data.User.DisplayName, profile.Data.User.AvatarURL
+}

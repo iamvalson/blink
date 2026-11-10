@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,7 +21,8 @@ import (
 type SocialPlatform string
 
 var (
-	ErrSocialAccountNotFound = errors.New("account not found")
+	ErrAccountIdentityMismatch = errors.New("disconnect the existing Instagram account before connecting another")
+	ErrSocialAccountNotFound   = errors.New("account not found")
 )
 
 const (
@@ -34,6 +37,12 @@ func NewSocialAccountRepository(db *pgxpool.Pool) *SocialAccountRepository {
 	return &SocialAccountRepository{db: db}
 }
 
+type SocialAccountMetadata struct {
+	AvatarURL       string
+	ProviderSubject string
+	Username        string
+}
+
 func (r *SocialAccountRepository) Upsert(
 	ctx context.Context,
 	userID string,
@@ -42,7 +51,32 @@ func (r *SocialAccountRepository) Upsert(
 	accessToken string,
 	refreshToken string,
 	expiresAt time.Time,
+	metadata ...SocialAccountMetadata,
 ) error {
+	var details SocialAccountMetadata
+	if len(metadata) > 0 {
+		details = metadata[0]
+	}
+	details.Username = strings.TrimSpace(details.Username)
+	details.AvatarURL = strings.TrimSpace(details.AvatarURL)
+	if avatar, err := url.ParseRequestURI(details.AvatarURL); err != nil || avatar.Scheme != "https" || avatar.Hostname() == "" || avatar.User != nil {
+		details.AvatarURL = ""
+	}
+	if platform == "instagram" && len(metadata) > 0 {
+		tag, err := r.db.Exec(ctx, `INSERT INTO social_accounts(user_id,platform,platform_user_id,access_token,expires_at,instagram_subject,instagram_username,platform_avatar_url)
+ VALUES($1,'instagram',$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))
+ ON CONFLICT(user_id,platform) DO UPDATE SET access_token=EXCLUDED.access_token,expires_at=EXCLUDED.expires_at,
+ instagram_subject=EXCLUDED.instagram_subject,instagram_username=COALESCE(EXCLUDED.instagram_username,social_accounts.instagram_username),
+ platform_avatar_url=COALESCE(EXCLUDED.platform_avatar_url,social_accounts.platform_avatar_url),updated_at=NOW()
+ WHERE social_accounts.platform_user_id=EXCLUDED.platform_user_id`, userID, platformUserID, accessToken, expiresAt, details.ProviderSubject, details.Username, details.AvatarURL)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrAccountIdentityMismatch
+		}
+		return nil
+	}
 	const query = `
 		INSERT INTO social_accounts (
 			user_id,
@@ -50,23 +84,36 @@ func (r *SocialAccountRepository) Upsert(
 			platform_user_id,
 			access_token,
 			refresh_token,
-			expires_at
+			expires_at,
+            platform_username,
+            platform_avatar_url
 		)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, NULLIF($7, ''), NULLIF($8, ''))
 		ON CONFLICT (user_id, platform)
 		DO UPDATE SET
 			platform_user_id = EXCLUDED.platform_user_id,
 			access_token = EXCLUDED.access_token,
 			refresh_token = COALESCE(EXCLUDED.refresh_token, social_accounts.refresh_token),
 			expires_at = EXCLUDED.expires_at,
+            platform_username = CASE
+                WHEN social_accounts.platform_user_id = EXCLUDED.platform_user_id
+                THEN COALESCE(EXCLUDED.platform_username,social_accounts.platform_username)
+                ELSE EXCLUDED.platform_username END,
+            platform_avatar_url = CASE
+                WHEN social_accounts.platform_user_id = EXCLUDED.platform_user_id
+                THEN COALESCE(EXCLUDED.platform_avatar_url,social_accounts.platform_avatar_url)
+                ELSE EXCLUDED.platform_avatar_url END,
 			updated_at = NOW()
 	`
-	_, err := r.db.Exec(ctx, query, userID, platform, platformUserID, accessToken, refreshToken, expiresAt)
+	tag, err := r.db.Exec(ctx, query, userID, platform, platformUserID, accessToken, refreshToken, expiresAt, details.Username, details.AvatarURL)
 
 	if err != nil {
 		return fmt.Errorf("upsert social account: %w", err)
 	}
 
+	if tag.RowsAffected() == 0 {
+		return ErrAccountIdentityMismatch
+	}
 	return nil
 }
 
@@ -94,15 +141,15 @@ func (r *SocialAccountRepository) GetByIDAndUserID(ctx context.Context, userID s
 func (r *SocialAccountRepository) ListByUserID(ctx context.Context, userID string) ([]*model.SocialAccount, error) {
 	const query = `
 		SELECT 
-			sa.id, sa.user_id, sa.platform, sa.platform_user_id, sa.expires_at, sa.created_at, sa.updated_at,
-			EXISTS (
+			sa.id, sa.user_id, sa.platform, sa.platform_user_id, sa.expires_at, sa.created_at, sa.updated_at, COALESCE(sa.platform_username,sa.instagram_username,''),
+			((sa.platform='instagram' AND COALESCE(sa.expires_at <= NOW(),true)) OR EXISTS (
 				SELECT 1 FROM post_targets pt
 				JOIN publication_attempts pa ON pa.post_target_id = pt.id
 				WHERE pt.social_account_id = sa.id
 				  AND pt.status = 'FAILED'
 				  AND pa.error_code = 'ACCOUNT_RECONNECT_REQUIRED'
 				  AND (pa.completed_at IS NULL OR pa.completed_at >= sa.updated_at)
-			) AS reconnect_required
+			)) AS reconnect_required
 		FROM social_accounts sa
 		WHERE sa.user_id = $1
 	`
@@ -115,7 +162,7 @@ func (r *SocialAccountRepository) ListByUserID(ctx context.Context, userID strin
 	var accounts []*model.SocialAccount
 	for rows.Next() {
 		var a model.SocialAccount
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Platform, &a.PlatformUserID, &a.ExpiresAt, &a.CreatedAt, &a.UpdatedAt, &a.ReconnectRequired); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Platform, &a.PlatformUserID, &a.ExpiresAt, &a.CreatedAt, &a.UpdatedAt, &a.Username, &a.ReconnectRequired); err != nil {
 			return nil, fmt.Errorf("scan social account: %w", err)
 		}
 		accounts = append(accounts, &a)

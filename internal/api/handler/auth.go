@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -332,7 +333,12 @@ func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		encryptedAccessToken,
 		encryptedRefreshToken,
 		authResult.Expiry,
+		storage.SocialAccountMetadata{ProviderSubject: authResult.ProviderSubject, Username: authResult.Username, AvatarURL: authResult.AvatarURL},
 	); err != nil {
+		if errors.Is(err, storage.ErrAccountIdentityMismatch) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		log.Error().Err(err).Str("user_id", userID).Str("platform", platform).
 			Msg("Failed to save social account")
 		http.Error(w, fmt.Sprintf("Failed to save %s account", platform), http.StatusInternalServerError)

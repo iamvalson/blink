@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/iamvalson/blink/internal/connectors/instagram"
 	"github.com/iamvalson/blink/internal/mediastore"
 	"github.com/iamvalson/blink/internal/model"
 	"github.com/iamvalson/blink/internal/storage"
@@ -404,4 +405,39 @@ func (s *MediaService) OpenMedia(ctx context.Context, mediaID, userID uuid.UUID)
 		return nil, nil, err
 	}
 	return record, body, nil
+}
+
+// ValidateInstagramMedia reads the exact completed asset used for publishing.
+func (s *MediaService) ValidateInstagramMedia(ctx context.Context, user, id uuid.UUID, format string) error {
+	record, err := s.media.GetMedia(ctx, id, user)
+	if errors.Is(err, storage.ErrMediaNotFound) {
+		return fmt.Errorf("%w: Instagram attachment was not found", ErrPostValidation)
+	}
+	if err != nil {
+		return err
+	}
+	if record.UploadStatus != "complete" || record.StorageProvider != "r2" {
+		return fmt.Errorf("%w: Instagram attachment must be a completed upload", ErrPostValidation)
+	}
+	if (record.ContentType == "video/mp4" || record.ContentType == "video/quicktime") && format != "IMAGE" {
+		if record.FileSize <= 0 || record.FileSize > 1_000_000_000 {
+			return fmt.Errorf("%w: Instagram video must be no larger than 1 GB", ErrPostValidation)
+		}
+		return nil
+	}
+	if record.ContentType != "image/jpeg" || format == "REELS" {
+		return fmt.Errorf("%w: Instagram requires a compatible JPEG photo or MP4/MOV video", ErrPostValidation)
+	}
+	body, err := s.store.Get(ctx, record.StorageKey)
+	if errors.Is(err, mediastore.ErrNotFound) {
+		return fmt.Errorf("%w: Instagram attachment could not be read", ErrPostValidation)
+	}
+	if err != nil {
+		return err
+	}
+	defer body.Close()
+	if err := instagram.ValidateImage(body, record.FileSize, format); err != nil {
+		return fmt.Errorf("%w: %v", ErrPostValidation, err)
+	}
+	return nil
 }

@@ -87,13 +87,15 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			pt.social_account_id,
 			sa.platform,
 			sa.platform_user_id,
-			CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END,
+			COALESCE(sa.platform_username,sa.instagram_username),
+ sa.platform_avatar_url,
+			CASE WHEN sa.platform IN ('tiktok','instagram') AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END,
 			pa.platform_post_id,
 			pa.platform_url,
 			pa.error_code,
 			pa.error_message,
 			CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
-				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
+				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override, pt.instagram_format
 		FROM post_targets pt
 		JOIN social_accounts sa ON sa.id = pt.social_account_id
 		LEFT JOIN publication_attempts pa ON pa.post_target_id = pt.id
@@ -106,6 +108,7 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 	defer rows.Close()
 
 	post.Targets = make([]model.PostTargetDetail, 0)
+	hasInstagram := false
 	for rows.Next() {
 		var target model.PostTargetDetail
 		err := rows.Scan(
@@ -113,19 +116,32 @@ func (r *PostRepository) GetPostWithDetails(ctx context.Context, userID, postID 
 			&target.SocialAccountID,
 			&target.Platform,
 			&target.PlatformUserID,
+			&target.PlatformUsername,
+			&target.PlatformAvatarURL,
 			&target.Status,
 			&target.PlatformPostID,
 			&target.PlatformURL,
 			&target.ErrorCode,
 			&target.ErrorMessage,
-			&target.PublishedAt, &target.SendToTikTokInbox, &target.CaptionOverride,
+			&target.PublishedAt, &target.SendToTikTokInbox, &target.CaptionOverride, &target.InstagramFormat,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan post target: %w", err)
 		}
 		post.Targets = append(post.Targets, target)
+		hasInstagram = hasInstagram || target.Platform == "instagram"
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read post targets: %w", err)
+	}
+	rows.Close()
 
+	if hasInstagram {
+		post.InstagramMedia, err = r.getInstagramPreviewMedia(ctx, userID, postID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &post, nil
 }
 
@@ -223,7 +239,7 @@ func (r *PostRepository) ListPosts(ctx context.Context, userID uuid.UUID, filter
 		targetRows, err := r.db.Query(ctx, `
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
-				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
+				CASE WHEN sa.platform IN ('tiktok','instagram') AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
 				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
 			FROM post_targets pt
@@ -423,10 +439,13 @@ func (r *PostRepository) CreatePost(
 	idempotencyKey string,
 	input model.CreatePostInput,
 ) (*model.Post, error) {
-	if len(input.MediaIDs) > 1 {
+	if len(input.MediaIDs) > 1 && len(input.InstagramFormats) == 0 {
 		return nil, errors.New("only one media attachment is supported")
 	}
-	if len(input.MediaIDs) == 1 {
+	if len(input.MediaIDs) > 10 {
+		return nil, errors.New("at most 10 media attachments are supported")
+	}
+	if len(input.MediaIDs) > 0 {
 		if input.MediaID != nil && *input.MediaID != input.MediaIDs[0] {
 			return nil, errors.New("media_id and media_ids must reference the same media")
 		}
@@ -529,6 +548,36 @@ func (r *PostRepository) CreatePost(
 		}
 	}
 
+	for id := range input.InstagramFormats {
+		valid := false
+		for i, target := range input.Targets {
+			if target.String() == id && targetPlatforms[i] == "instagram" {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return nil, errors.New("Instagram format must refer to a selected Instagram account")
+		}
+	}
+
+	if input.InstagramFeedMediaID != nil {
+		if len(input.MediaIDs) > 1 || input.MediaID == nil {
+			return nil, errors.New("Instagram feed preparation requires exactly one original attachment")
+		}
+		feedTarget := false
+		for _, target := range input.Targets {
+			if input.InstagramFormats[target.String()] == "IMAGE" {
+				feedTarget = true
+				break
+			}
+		}
+		if !feedTarget {
+			return nil, errors.New("Instagram prepared media requires a feed photo target")
+		}
+
+	}
+
 	// Validate options by actual account, never by client-supplied platform labels.
 	for i, platform := range targetPlatforms {
 		if platform == "tiktok" {
@@ -586,6 +635,34 @@ func (r *PostRepository) CreatePost(
 		}
 	}
 
+	instagramIDs := input.InstagramAttachments()
+	instagramTypes := mediaContentTypes
+	if len(input.InstagramMediaIDs) > 0 || input.InstagramFeedMediaID != nil {
+		if len(input.InstagramFormats) == 0 || len(instagramIDs) != len(mediaIDsToCheck) ||
+			(len(input.InstagramMediaIDs) > 0 && input.InstagramFeedMediaID != nil) {
+			return nil, errors.New("Instagram prepared media must match the original attachments in order")
+		}
+		instagramTypes = append([]string(nil), mediaContentTypes...)
+		for i, id := range instagramIDs {
+			if id == mediaIDsToCheck[i] {
+				continue
+			}
+			if !strings.HasPrefix(mediaContentTypes[i], "image/") {
+				return nil, fmt.Errorf("Instagram item %d must use the original video", i+1)
+			}
+			var contentType string
+			err := tx.QueryRow(ctx, `SELECT content_type FROM media WHERE id=$1 AND user_id=$2 AND upload_status='complete'
+                AND content_type='image/jpeg' AND storage_provider='r2' FOR KEY SHARE`, id, userID).Scan(&contentType)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("Instagram item %d needs a completed JPEG upload owned by you", i+1)
+			}
+			if err != nil {
+				return nil, err
+			}
+			instagramTypes[i] = contentType
+		}
+	}
+
 	// Validate and normalise content_format before platform checks
 	requestedFormat := input.ContentFormat
 	if requestedFormat == "" {
@@ -599,8 +676,25 @@ func (r *PostRepository) CreatePost(
 	}
 
 	// Platform-specific validation
-	for _, p := range targetPlatforms {
-		if p == "tiktok" {
+	for i, p := range targetPlatforms {
+		if len(mediaIDsToCheck) > 1 && p != "instagram" {
+			return nil, errors.New("multiple attachments require an Instagram carousel target")
+		}
+		if p == "instagram" {
+			format := input.InstagramFormats[input.Targets[i].String()]
+			validCount := (format == "CAROUSEL" && len(mediaContentTypes) >= 2 && len(mediaContentTypes) <= 10) ||
+				((format == "IMAGE" || format == "REELS" || format == "STORIES") && len(mediaContentTypes) == 1)
+			if !validCount {
+				return nil, errors.New("Instagram format requires compatible media: one image, Reel or Story, or 2–10 carousel items")
+			}
+			for _, contentType := range instagramTypes {
+				image := contentType == "image/jpeg"
+				video := contentType == "video/mp4" || contentType == "video/quicktime"
+				if !(image || video) || (format == "IMAGE" && !image) || (format == "REELS" && !video) {
+					return nil, errors.New("Instagram publishing requires JPEG images or MP4/MOV videos compatible with the selected format")
+				}
+			}
+		} else if p == "tiktok" {
 			if len(mediaIDsToCheck) != 1 || len(mediaContentTypes) != 1 || !strings.HasPrefix(mediaContentTypes[0], "video/") {
 				return nil, errors.New("TikTok publishing requires exactly one completed video")
 			}
@@ -761,8 +855,20 @@ func (r *PostRepository) CreatePost(
 		return nil, fmt.Errorf("create post: %w", err)
 	}
 
+	for _, platform := range targetPlatforms {
+		if platform != "instagram" {
+			continue
+		}
+		for i, id := range instagramIDs {
+			if _, err = tx.Exec(ctx, `INSERT INTO instagram_post_media(post_id,position,media_id) VALUES($1,$2,$3)`, post.ID, i, id); err != nil {
+				return nil, err
+			}
+		}
+		break
+	}
+
 	// Create post targets
-	for _, socialAccountID := range input.Targets {
+	for targetIndex, socialAccountID := range input.Targets {
 		var postTargetID uuid.UUID
 		var captionOverride *string
 		if caption, ok := input.CaptionOverrides[socialAccountID.String()]; ok {
@@ -794,6 +900,11 @@ func (r *PostRepository) CreatePost(
 			return nil, fmt.Errorf("create post target: %w", err)
 		}
 
+		if targetPlatforms[targetIndex] == "instagram" {
+			if _, err = tx.Exec(ctx, `UPDATE post_targets SET instagram_format=$2 WHERE id=$1`, postTargetID, input.InstagramFormats[socialAccountID.String()]); err != nil {
+				return nil, err
+			}
+		}
 		if o, ok := input.TikTokOptions[socialAccountID.String()]; ok {
 			raw, marshalErr := json.Marshal(o)
 			if marshalErr != nil {
@@ -1015,7 +1126,7 @@ func validateTargetCaptionLengths(input model.CreatePostInput, platforms []strin
 		switch platform {
 		case "twitter":
 			limit = 280
-		case "tiktok":
+		case "tiktok", "instagram":
 			limit = 2200
 		case "youtube":
 			limit = 5000
@@ -1029,27 +1140,33 @@ func validateTargetCaptionLengths(input model.CreatePostInput, platforms []strin
 
 func hashCreatePostRequest(input model.CreatePostInput) (string, error) {
 	data := struct {
-		CaptionOverrides map[string]string              `json:"caption_overrides,omitempty"`
-		TikTokOptions    map[string]model.TikTokOptions `json:"tiktok_options,omitempty"`
-		Caption          *string                        `json:"caption"`
-		MediaURL         *string                        `json:"media_url"`
-		MediaType        *string                        `json:"media_type"`
-		MediaID          *uuid.UUID                     `json:"media_id,omitempty"`
-		MediaIDs         []uuid.UUID                    `json:"media_ids,omitempty"`
-		Targets          []uuid.UUID                    `json:"targets"`
-		ContentFormat    string                         `json:"content_format"`
-		ScheduledAt      *time.Time                     `json:"scheduled_at,omitempty"`
+		CaptionOverrides     map[string]string              `json:"caption_overrides,omitempty"`
+		InstagramMediaIDs    []uuid.UUID                    `json:"instagram_media_ids,omitempty"`
+		InstagramFeedMediaID *uuid.UUID                     `json:"instagram_feed_media_id,omitempty"`
+		InstagramFormats     map[string]string              `json:"instagram_formats,omitempty"`
+		TikTokOptions        map[string]model.TikTokOptions `json:"tiktok_options,omitempty"`
+		Caption              *string                        `json:"caption"`
+		MediaURL             *string                        `json:"media_url"`
+		MediaType            *string                        `json:"media_type"`
+		MediaID              *uuid.UUID                     `json:"media_id,omitempty"`
+		MediaIDs             []uuid.UUID                    `json:"media_ids,omitempty"`
+		Targets              []uuid.UUID                    `json:"targets"`
+		ContentFormat        string                         `json:"content_format"`
+		ScheduledAt          *time.Time                     `json:"scheduled_at,omitempty"`
 	}{
-		CaptionOverrides: input.CaptionOverrides,
-		TikTokOptions:    input.TikTokOptions,
-		Caption:          input.Caption,
-		MediaURL:         input.MediaURL,
-		MediaType:        input.MediaType,
-		MediaID:          input.MediaID,
-		MediaIDs:         input.MediaIDs,
-		Targets:          input.Targets,
-		ContentFormat:    input.ContentFormat,
-		ScheduledAt:      input.ScheduledAt,
+		CaptionOverrides:     input.CaptionOverrides,
+		InstagramMediaIDs:    input.InstagramMediaIDs,
+		InstagramFeedMediaID: input.InstagramFeedMediaID,
+		InstagramFormats:     input.InstagramFormats,
+		TikTokOptions:        input.TikTokOptions,
+		Caption:              input.Caption,
+		MediaURL:             input.MediaURL,
+		MediaType:            input.MediaType,
+		MediaID:              input.MediaID,
+		MediaIDs:             input.MediaIDs,
+		Targets:              input.Targets,
+		ContentFormat:        input.ContentFormat,
+		ScheduledAt:          input.ScheduledAt,
 	}
 
 	encoded, err := json.Marshal(data)
@@ -1264,7 +1381,7 @@ func (r *PostRepository) ListCalendarPosts(ctx context.Context, userID uuid.UUID
 		targetRows, err := r.db.Query(ctx, `
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
-				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
+				CASE WHEN sa.platform IN ('tiktok','instagram') AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
 				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
 			FROM post_targets pt
@@ -1371,7 +1488,7 @@ func (r *PostRepository) ListUpcomingPosts(ctx context.Context, userID uuid.UUID
 		targetRows, err := r.db.Query(ctx, `
 			SELECT
 				pt.id, pt.post_id, pt.social_account_id, sa.platform, sa.platform_user_id,
-				CASE WHEN sa.platform='tiktok' AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
+				CASE WHEN sa.platform IN ('tiktok','instagram') AND pa.status IN ('PROCESSING','UNKNOWN','RETRYING') THEN pa.status ELSE pt.status END, pa.platform_post_id, pa.platform_url, pa.error_code,
 				pa.error_message, CASE WHEN pt.status <> 'INBOX_DELIVERED' THEN pa.completed_at END,
 				COALESCE(pt.tiktok_options->>'send_to_inbox' = 'true', false), pt.caption_override
 			FROM post_targets pt

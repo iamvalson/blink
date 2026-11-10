@@ -10,6 +10,7 @@ import (
 	"github.com/iamvalson/blink/internal/api/handler"
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
+	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
 	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/middleware"
@@ -26,9 +27,38 @@ import (
 //	GET /auth/foo          → OAuth start (redirect to platform)
 //	GET /auth/foo/callback → OAuth callback (exchange code, store token)
 //
-// Adding a new platform requires only adding its connector to this slice.
-// No other file outside internal/connectors/<platform>/ needs to change.
+// Platform-specific callbacks are registered separately from OAuth.
 func NewRouter(
+	oauthConnectors []connectors.OAuthConnector,
+	accounts *storage.SocialAccountRepository,
+	posts *storage.PostRepository,
+	encryptionKey string,
+	tiktokConnector *tiktok.Connector,
+	frontendURL string,
+	signupService *service.SignupService,
+	loginService *service.LoginService,
+	meService *service.MeService,
+	jwtService *auth.JWTService,
+	corsOrigins []string,
+	secureCookie bool,
+	cookieSecure bool,
+	cookieSameSite http.SameSite,
+	tokenManager *service.TokenManagerService,
+	authProtection *middleware.AuthProtection,
+	recoveryService *service.PasswordRecoveryService,
+	mediaHandlers ...*handler.MediaHandler,
+) *chi.Mux {
+	return NewRouterWithOptions(RouterOptions{}, oauthConnectors, accounts, posts, encryptionKey, tiktokConnector, frontendURL, signupService, loginService, meService, jwtService, corsOrigins, secureCookie, cookieSecure, cookieSameSite, tokenManager, authProtection, recoveryService, mediaHandlers...)
+}
+
+type RouterOptions struct {
+	OAuthStore   *handler.RedisOAuthTransactions
+	MediaService *service.MediaService
+	Instagram    config.InstagramConfig
+}
+
+func NewRouterWithOptions(
+	options RouterOptions,
 	oauthConnectors []connectors.OAuthConnector,
 	accounts *storage.SocialAccountRepository,
 	posts *storage.PostRepository,
@@ -98,6 +128,9 @@ func NewRouter(
 	for _, connector := range oauthConnectors {
 		authHandler := handler.NewAuthHandler(connector, accounts, encryptionKey, frontendURL, secureCookie)
 		platformID := connector.PlatformID()
+		if options.OAuthStore != nil {
+			authHandler = handler.NewAuthHandlerWithStore(connector, accounts, encryptionKey, frontendURL, secureCookie, options.OAuthStore.ForPlatform(platformID))
+		}
 		if revoker, ok := connector.(service.AccountTokenRevoker); ok {
 			revokers[platformID] = revoker
 		}
@@ -111,15 +144,23 @@ func NewRouter(
 		r.Get(fmt.Sprintf("/auth/%s/callback", platformID), authHandler.OAuthCallback)
 	}
 
+	registerInstagramRoutes(r, options.Instagram, accounts)
+
 	// Accounts routes
 	accountsService := service.NewAccountsService(accounts, tiktokConnector, tokenManager, revokers)
 	accountsHandler := handler.NewAccountsHandler(accountsService)
+	for _, connector := range oauthConnectors {
+		if connector.PlatformID() == "instagram" {
+			accountsHandler.InstagramAvailable = true
+			break
+		}
+	}
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts", accountsHandler.ListAccounts)
 	r.With(middleware.RequireAuth(jwtService)).Get("/api/v1/accounts/{accountID}/tiktok/creator-info", accountsHandler.GetTikTokCreatorInfo)
 	r.With(middleware.RequireAuth(jwtService)).Delete("/api/v1/accounts/{platform}", accountsHandler.DisconnectAccount)
 
 	// Post routes
-	postService := service.NewPostService(posts)
+	postService := service.NewPostService(posts, options.MediaService)
 	postHandler := handler.NewPostHandler(postService)
 
 	r.With(middleware.RequireAuth(jwtService)).Post("/api/v1/posts", postHandler.CreatePost)

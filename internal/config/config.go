@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	Instagram InstagramConfig
 	// Server
 	Port           int
 	Env            string
@@ -93,6 +94,11 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
+		Instagram: InstagramConfig{
+			AppID: os.Getenv("INSTAGRAM_APP_ID"), AppSecret: os.Getenv("INSTAGRAM_APP_SECRET"),
+			CallbackURL: os.Getenv("INSTAGRAM_CALLBACK_URL"), APIVersion: os.Getenv("INSTAGRAM_API_VERSION"),
+			WebhookVerifyToken: os.Getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN"), WebhookAppSecret: os.Getenv("META_APP_SECRET"),
+		},
 		AuthTrustedProxyCIDRs:       getEnv("AUTH_TRUSTED_PROXY_CIDRS", ""),
 		JWTSigningKeyFile:           getEnv("JWT_SIGNING_KEY_FILE", "./.secrets/jwt-signing-key.pem"),
 		TikTokVerificationFile:      getEnv("TIKTOK_VERIFICATION_FILE", ""),
@@ -137,6 +143,9 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	if err := c.Instagram.validate(); err != nil {
+		return err
+	}
 	isProd := strings.EqualFold(c.Env, "production")
 	driver := strings.ToLower(strings.TrimSpace(c.MediaStorageDriver))
 

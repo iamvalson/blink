@@ -29,12 +29,15 @@ var (
 
 type PostService struct {
 	posts *storage.PostRepository
+	media *MediaService
 }
 
-func NewPostService(posts *storage.PostRepository) *PostService {
-	return &PostService{
-		posts: posts,
+func NewPostService(posts *storage.PostRepository, media ...*MediaService) *PostService {
+	service := &PostService{posts: posts}
+	if len(media) > 0 {
+		service.media = media[0]
 	}
+	return service
 }
 
 func (s *PostService) CreatePost(
@@ -61,6 +64,24 @@ func (s *PostService) CreatePost(
 		if err := options.Validate(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrPostValidation, err)
 		}
+	}
+	for _, format := range input.InstagramFormats {
+		ids := input.InstagramAttachments()
+		if format == "REELS" && (len(ids) != 1 || len(input.MediaIDs) > 1) {
+			return nil, fmt.Errorf("%w: Instagram Reels require exactly one MP4 or MOV video", ErrPostValidation)
+		}
+		if len(ids) == 0 || len(ids) > 10 {
+			return nil, fmt.Errorf("%w: Instagram requires 1–10 attachments", ErrPostValidation)
+		}
+		if s.media == nil {
+			return nil, errors.New("Instagram media validation is unavailable")
+		}
+		for i, id := range ids {
+			if err := s.media.ValidateInstagramMedia(ctx, userID, id, format); err != nil {
+				return nil, fmt.Errorf("Instagram item %d: %w", i+1, err)
+			}
+		}
+		break
 	}
 	// Call repository to create post. Storage-layer validation errors (platform
 	// rules, media checks, etc.) are wrapped so the handler can route them to
@@ -92,7 +113,7 @@ func validateCaptionInput(input model.CreatePostInput) error {
 		if !overridden && input.Caption != nil {
 			caption = *input.Caption
 		}
-		if strings.TrimSpace(caption) == "" {
+		if strings.TrimSpace(caption) == "" && input.InstagramFormats[key] == "" {
 			return errors.New("caption is required for every selected account")
 		}
 	}
@@ -108,7 +129,7 @@ func validateCaptionInput(input model.CreatePostInput) error {
 // business-rule or data-validation checks in the storage layer and should
 // therefore be surfaced to the caller as a 400 Bad Request.
 func isStorageValidationError(err error) bool {
-	if strings.Contains(err.Error(), "TikTok") {
+	if strings.Contains(err.Error(), "TikTok") || strings.Contains(err.Error(), "Instagram") {
 		return true
 	}
 	// Explicit sentinel errors defined in storage

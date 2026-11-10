@@ -19,6 +19,7 @@ import (
 	apiservice "github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/instagram"
 	"github.com/iamvalson/blink/internal/jobs"
 	logger "github.com/iamvalson/blink/internal/log"
 	"github.com/iamvalson/blink/internal/mediastore"
@@ -225,7 +226,7 @@ func (p *PublishProcessor) ProcessPublishJob(
 
 		platform, publishErr := processor.processTarget(ctx, post, &target)
 		if publishErr == nil {
-			if _, isAsync := processor.connectors[platform].(connectors.AsyncVideoPublisher); isAsync {
+			if _, isAsync := processor.connectors[platform].(connectors.AsyncVideoPublisher); isAsync || platform == instagram.Platform {
 				latest, loadErr := repo.GetPublicationAttempt(ctx, target.ID)
 				if loadErr != nil {
 					return loadErr
@@ -340,6 +341,9 @@ func (p *PublishProcessor) publishToTarget(
 		return newPublishError(connectors.ErrorPermanent, errors.New(errMsg))
 	}
 
+	if ig, ok := connector.(*instagram.Connector); ok {
+		return p.publishInstagram(ctx, post, target, attempt, account, ig)
+	}
 	if async, ok := connector.(connectors.AsyncVideoPublisher); ok {
 		return p.publishAsyncVideo(ctx, post, target, attempt, account, connector, async)
 	}

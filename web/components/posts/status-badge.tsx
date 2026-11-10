@@ -1,12 +1,14 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import type { ContentFormat } from "@/types/post";
+import type { ContentFormat, InstagramFormat } from "@/types/post";
 import {
   AlertCircle,
   CheckCircle2,
   Clock,
   Film,
+  ImageIcon,
+  Images,
   Loader2,
   RefreshCcw,
   Tv2,
@@ -120,16 +122,20 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
 }
 
 interface FormatBadgeProps {
-  format: ContentFormat;
+  format: ContentFormat | InstagramFormat;
   className?: string;
 }
 
 const FORMAT_CONFIG: Record<
-  ContentFormat,
+  ContentFormat | InstagramFormat,
   { label: string; icon: React.ElementType }
 > = {
   VIDEO: { label: "Video", icon: Tv2 },
   SHORT: { label: "Short", icon: Film },
+  IMAGE: { label: "Feed photo", icon: ImageIcon },
+  REELS: { label: "Reel", icon: Film },
+  CAROUSEL: { label: "Carousel", icon: Images },
+  STORIES: { label: "Story", icon: ImageIcon },
 };
 
 export function FormatBadge({ format, className }: FormatBadgeProps) {

@@ -20,7 +20,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { siTiktok, siX, siYoutube } from "simple-icons";
+import { PlatformIcon } from "@/components/accounts/platform-icon";
+import { PLATFORMS } from "@/types/platform";
 import { formatDistanceToNow } from "date-fns";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -44,36 +45,6 @@ const TERMINAL_STATUSES = new Set([
   "CANCELLED",
 ]);
 
-// ─── Platform icon ────────────────────────────────────────────────────────────
-
-function PlatformIcon({
-  platform,
-  className = "h-3.5 w-3.5",
-}: {
-  platform: string;
-  className?: string;
-}) {
-  const icon =
-    platform === "youtube"
-      ? siYoutube
-      : platform === "twitter"
-        ? siX
-        : platform === "tiktok"
-          ? siTiktok
-          : null;
-  if (!icon) return null;
-  return (
-    <svg
-      role="img"
-      viewBox="0 0 24 24"
-      className={`fill-current ${className}`}
-      aria-hidden
-    >
-      <path d={icon.path} />
-    </svg>
-  );
-}
-
 // ─── Status filter tabs ───────────────────────────────────────────────────────
 
 const STATUS_FILTERS = [
@@ -89,9 +60,7 @@ const STATUS_FILTERS = [
 
 const PLATFORM_FILTERS = [
   { value: "", label: "All platforms" },
-  { value: "youtube", label: "YouTube" },
-  { value: "twitter", label: "X" },
-  { value: "tiktok", label: "TikTok" },
+  ...PLATFORMS.map(({ id, name }) => ({ value: id, label: name })),
 ];
 
 // ─── Post card ────────────────────────────────────────────────────────────────
@@ -172,7 +141,7 @@ function PostCard({
     <div className="flex items-start gap-2 rounded-xl border bg-card p-3 hover:bg-muted/30 sm:gap-4 sm:p-4 transition-colors">
       {/* Platform icon */}
       <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-background">
-        <PlatformIcon platform={platform} />
+        <PlatformIcon platform={platform} size={16} />
       </div>
 
       {/* Main content */}
@@ -205,14 +174,11 @@ function PostCard({
               >
                 <PlatformIcon
                   platform={target.platform}
-                  className="h-3 w-3 fill-current"
+                  size={12}
+                  decorative
                 />
                 <span className="capitalize">
-                  {target.platform === "twitter"
-                    ? "X"
-                    : target.platform === "tiktok"
-                      ? "TikTok"
-                      : target.platform}
+                  {PLATFORMS.find(entry => entry.id === target.platform)?.name ?? target.platform}
                 </span>
                 <StatusBadge status={target.status} />
               </div>

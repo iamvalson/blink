@@ -12,9 +12,10 @@ type TwitterConfig struct {
 
 // TwitterUserInfo holds authenticated user data
 type TwitterUserInfo struct {
-	ID       string
-	Username string
-	Name     string
+	AvatarURL string `json:"profile_image_url"`
+	ID        string
+	Username  string
+	Name      string
 }
 
 // TweetResponse is what Twitter API returns after posting

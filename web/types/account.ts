@@ -5,6 +5,7 @@ export interface SocialAccount {
   user_id: string;
   platform: Platform;
   platform_user_id: string;
+  username?: string;
   expires_at?: string;
   reconnect_required?: boolean;
   created_at: string;
@@ -13,4 +14,5 @@ export interface SocialAccount {
 
 export interface ConnectedAccountsResponse {
   accounts: SocialAccount[];
+  instagram_available?: boolean;
 }

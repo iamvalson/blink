@@ -28,17 +28,20 @@ const (
 )
 
 type CreatePostInput struct {
-	CaptionOverrides map[string]string        `json:"caption_overrides,omitempty"`
-	TikTokOptions    map[string]TikTokOptions `json:"tiktok_options,omitempty"`
-	Caption          *string                  `json:"caption"`
-	Title            *string                  `json:"title,omitempty"`
-	MediaURL         *string                  `json:"media_url"`
-	MediaType        *string                  `json:"media_type"`
-	MediaID          *uuid.UUID               `json:"media_id,omitempty"`
-	MediaIDs         []uuid.UUID              `json:"media_ids,omitempty"`
-	Targets          []uuid.UUID              `json:"targets"`
-	ContentFormat    string                   `json:"content_format,omitempty"`
-	ScheduledAt      *time.Time               `json:"scheduled_at,omitempty"`
+	InstagramMediaIDs    []uuid.UUID              `json:"instagram_media_ids,omitempty"`
+	InstagramFeedMediaID *uuid.UUID               `json:"instagram_feed_media_id,omitempty"`
+	InstagramFormats     map[string]string        `json:"instagram_formats,omitempty"`
+	CaptionOverrides     map[string]string        `json:"caption_overrides,omitempty"`
+	TikTokOptions        map[string]TikTokOptions `json:"tiktok_options,omitempty"`
+	Caption              *string                  `json:"caption"`
+	Title                *string                  `json:"title,omitempty"`
+	MediaURL             *string                  `json:"media_url"`
+	MediaType            *string                  `json:"media_type"`
+	MediaID              *uuid.UUID               `json:"media_id,omitempty"`
+	MediaIDs             []uuid.UUID              `json:"media_ids,omitempty"`
+	Targets              []uuid.UUID              `json:"targets"`
+	ContentFormat        string                   `json:"content_format,omitempty"`
+	ScheduledAt          *time.Time               `json:"scheduled_at,omitempty"`
 }
 
 // IsTikTokInboxUpload identifies the single-target request shape that allows an empty caption.
@@ -90,6 +93,9 @@ type Post struct {
 }
 
 type PostTargetDetail struct {
+	PlatformAvatarURL *string    `json:"platform_avatar_url,omitempty"`
+	PlatformUsername  *string    `json:"platform_username,omitempty"`
+	InstagramFormat   *string    `json:"instagram_format,omitempty"`
 	CaptionOverride   *string    `json:"caption_override,omitempty"`
 	SendToTikTokInbox bool       `json:"send_to_tiktok_inbox,omitempty"`
 	ID                uuid.UUID  `json:"id"`
@@ -104,7 +110,14 @@ type PostTargetDetail struct {
 	PublishedAt       *time.Time `json:"published_at,omitempty"`
 }
 
+type PostAttachment struct {
+	Position    int        `json:"position"`
+	MediaID     *uuid.UUID `json:"media_id,omitempty"`
+	ContentType *string    `json:"content_type,omitempty"`
+}
+
 type PostWithDetails struct {
+	InstagramMedia       []PostAttachment   `json:"instagram_media,omitempty"`
 	ID                   uuid.UUID          `json:"id"`
 	UserID               uuid.UUID          `json:"user_id"`
 	Caption              *string            `json:"caption,omitempty"`
@@ -131,4 +144,21 @@ type IdempotencyRecord struct {
 	ResponseStatus *int
 	ResponseBody   []byte
 	ExpiresAt      time.Time
+}
+
+// InstagramAttachments returns the target-specific media in publishing order.
+func (c CreatePostInput) InstagramAttachments() []uuid.UUID {
+	if len(c.InstagramMediaIDs) > 0 {
+		return c.InstagramMediaIDs
+	}
+	if c.InstagramFeedMediaID != nil {
+		return []uuid.UUID{*c.InstagramFeedMediaID}
+	}
+	if len(c.MediaIDs) > 0 {
+		return c.MediaIDs
+	}
+	if c.MediaID != nil {
+		return []uuid.UUID{*c.MediaID}
+	}
+	return nil
 }

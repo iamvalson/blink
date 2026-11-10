@@ -18,6 +18,7 @@ import (
 	"github.com/iamvalson/blink/internal/auth"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/instagram"
 	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
@@ -241,7 +242,14 @@ func run(ctx context.Context) error {
 	// To add a new OAuth platform, append its connector to this slice.
 	// No other file outside internal/connectors/<platform>/ needs to change.
 	oauthConnectors := []connectors.OAuthConnector{twitterConnector, youtubeConnector, tiktokConnector}
-	router := api.NewRouter(oauthConnectors, socialAccountRepo, postsRepo, cfg.EncryptionKey, tiktokConnector, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, tokenManager, authProtection, recoveryService, mediaHandler)
+	if ig := instagram.New(cfg.Instagram); ig != nil {
+		oauthConnectors = append(oauthConnectors, ig)
+	}
+	router := api.NewRouterWithOptions(api.RouterOptions{
+		OAuthStore:   handler.NewRedisOAuthTransactions(rateRedis),
+		MediaService: mediaService,
+		Instagram:    cfg.Instagram,
+	}, oauthConnectors, socialAccountRepo, postsRepo, cfg.EncryptionKey, tiktokConnector, cfg.FrontendURL, signupService, loginService, meService, jwtService, cfg.CORSOrigins, cfg.SecureCookie, cfg.CookieSecure, cfg.CookieSameSite, tokenManager, authProtection, recoveryService, mediaHandler)
 
 	// Keep signed delivery URLs outside request-URI loggers and redirecting routers.
 	var httpHandler http.Handler = router

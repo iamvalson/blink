@@ -56,6 +56,7 @@ export function PostDetails({ id }: { id: string }) {
     return <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">{back}<div role="alert" className="rounded-xl border px-4 py-10 text-center sm:p-12"><h1 className="text-xl font-semibold">{missing ? "Post not found" : "Could not load post"}</h1><p className="mb-5 mt-2 text-sm text-muted-foreground">{missing ? "This post may have been deleted or is no longer available." : "Please try loading the post again."}</p>{!missing && <Button variant="outline" onClick={() => postQuery.refetch()}>Try again</Button>}</div></div>;
   }
   const post = postQuery.data;
+  const instagramFormat = post.targets?.find(target => target.platform === "instagram")?.instagram_format;
   const canReschedule = (post.status === "SCHEDULED" || post.status === "QUEUED") &&
     !post.targets?.some(target => target.send_to_tiktok_inbox);
   const canDelete = !["QUEUED", "PUBLISHING", "PROCESSING"].includes(post.status);
@@ -66,7 +67,7 @@ export function PostDetails({ id }: { id: string }) {
     <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       {back}
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0"><h1 className="break-words text-2xl font-semibold tracking-tight">Post details</h1><div className="mt-3 flex flex-wrap items-center gap-2"><StatusBadge status={post.status} /><FormatBadge format={post.content_format} /></div></div>
+        <div className="min-w-0"><h1 className="break-words text-2xl font-semibold tracking-tight">Post details</h1><div className="mt-3 flex flex-wrap items-center gap-2"><StatusBadge status={post.status} /><FormatBadge format={instagramFormat ?? post.content_format} /></div></div>
         <div className="flex flex-wrap gap-2 [&_button]:min-h-11 lg:[&_button]:min-h-0">
           <Button variant="outline" size="sm" disabled={postQuery.isFetching} onClick={() => postQuery.refetch()}><RefreshCcw className="mr-2 size-4" />Refresh</Button>
           {canReschedule && <Button variant="outline" size="sm" disabled={action.isPending} onClick={() => setRescheduling(true)}><CalendarClock className="mr-2 size-4" />Reschedule</Button>}

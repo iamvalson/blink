@@ -70,7 +70,7 @@ func init() {
 
 func NormalizePlatform(platform string) string {
 	switch platform {
-	case PlatformTwitter, PlatformYouTube:
+	case PlatformTwitter, PlatformYouTube, "instagram":
 		return platform
 	default:
 		return PlatformUnknown
