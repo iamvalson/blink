@@ -19,6 +19,7 @@ import { useDisconnectAccount } from "@/features/accounts/hooks/use-disconnect-a
 import { AccountStatus } from "./account-status";
 import { ConnectPlatform } from "./connect-platform";
 import { PlatformIcon } from "./platform-icon";
+import { InstagramBrowserLogin } from "./instagram-browser-login";
 
 interface AccountCardProps {
   platform: PlatformDefinition;
@@ -114,6 +115,7 @@ export function AccountCard({
             Reconnect
           </Button>
         )}
+        {platform.id === "instagram" && <InstagramBrowserLogin disabled={isLoading} />}
       </CardContent>
     </Card>
   );

@@ -138,6 +138,10 @@ func NewRouterWithOptions(
 		// Initiation requires authentication — only a logged-in user can start OAuth.
 		r.With(middleware.RequireAuth(jwtService)).
 			Get(fmt.Sprintf("/auth/%s", platformID), authHandler.OAuthStart)
+		if platformID == "instagram" {
+			r.With(middleware.RequireAuth(jwtService)).
+				Post("/auth/instagram/browser-link", authHandler.OAuthBrowserLink)
+		}
 
 		// Callback does NOT require the auth_token cookie.
 		// User identity comes from the consumed OAuth transaction.
