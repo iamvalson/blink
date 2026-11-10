@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -159,18 +160,38 @@ func NewAuthHandlerWithStore(
 // must be identified at initiation time. The authenticated user ID is stored
 // inside the server-side transaction so the callback does not need the cookie.
 func (h *AuthHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
+	authURL, ok := h.startOAuth(w, r)
+	if ok {
+		http.Redirect(w, r, authURL, http.StatusFound)
+	}
+}
+
+// OAuthBrowserLink returns a short-lived provider URL for direct browser navigation.
+func (h *AuthHandler) OAuthBrowserLink(w http.ResponseWriter, r *http.Request) {
+	authURL, ok := h.startOAuth(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		AuthorizationURL string `json:"authorization_url"`
+	}{AuthorizationURL: authURL})
+}
+
+func (h *AuthHandler) startOAuth(w http.ResponseWriter, r *http.Request) (string, bool) {
+	w.Header().Set("Cache-Control", "no-store")
 	// User must be authenticated to initiate OAuth.
 	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		return "", false
 	}
 
 	state, err := generateRandomState()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate OAuth state")
 		http.Error(w, "Unable to start authentication", http.StatusInternalServerError)
-		return
+		return "", false
 	}
 
 	platform := h.connector.PlatformID()
@@ -191,17 +212,17 @@ func (h *AuthHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Str("platform", platform).Str("user_id", userID).
 			Msg("Failed to store OAuth transaction")
 		http.Error(w, "Unable to start authentication", http.StatusInternalServerError)
-		return
+		return "", false
 	}
 
 	authURL, err := h.connector.AuthCodeURL(state, verifier)
 
 	if err != nil {
 		http.Error(w, "Failed to generate authorization URL", http.StatusInternalServerError)
-		return
+		return "", false
 	}
 
-	http.Redirect(w, r, authURL, http.StatusFound)
+	return authURL, true
 }
 
 // TwitterAuth is an alias for OAuthStart for backward compatibility.

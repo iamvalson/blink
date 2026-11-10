@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -729,5 +731,39 @@ func TestOAuthCallback_UnauthenticatedRequest_NoCookieNeeded(t *testing.T) {
 	// Must not be 401 — the callback resolves identity from the transaction.
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatal("callback incorrectly requires auth_token cookie; got 401")
+	}
+}
+
+func TestOAuthBrowserLinkUsesAuthenticatedSingleUseTransaction(t *testing.T) {
+	h, _ := newTestHandler("instagram")
+	const path = "/auth/instagram/browser-link"
+	unauthenticated := httptest.NewRecorder()
+	h.OAuthBrowserLink(unauthenticated, httptest.NewRequest(http.MethodPost, path, nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", unauthenticated.Code)
+	}
+
+	response := httptest.NewRecorder()
+	h.OAuthBrowserLink(response, authenticatedRequest(http.MethodPost, path, "blink-user"))
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected browser link response: %d, %s", response.Code, response.Header().Get("Cache-Control"))
+	}
+	var link struct {
+		AuthorizationURL string `json:"authorization_url"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &link); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(link.AuthorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := parsed.Query().Get("state")
+	tx, ok := h.store.Consume(state)
+	if !ok || tx.UserID != "blink-user" || tx.Platform != "instagram" || !tx.ExpiresAt.After(time.Now()) {
+		t.Fatal("link is missing a valid transaction bound to the signed-in user")
+	}
+	if _, ok := h.store.Consume(state); ok {
+		t.Fatal("browser link state could be used twice")
 	}
 }
