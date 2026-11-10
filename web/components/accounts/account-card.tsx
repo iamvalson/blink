@@ -40,7 +40,7 @@ export function AccountCard({
 
   function handleDisconnect() {
     const message = `Disconnect ${platform.name}? This revokes Blink's access and removes publishing records for this connection from Blink.`;
-    if (confirm(message)) {
+    if (confirm(platform.id === "instagram" ? "Disconnect Instagram and remove its publishing records from Blink?" : message)) {
       disconnectMutation.mutate(platform.id, {
         onSuccess: () => {
           toast.success(`Successfully disconnected ${platform.name}`);
@@ -95,6 +95,7 @@ export function AccountCard({
 
       <CardContent className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 [&_button]:min-h-11 lg:[&_button]:min-h-0">
         <div>
+          {account?.username && <p className="text-sm font-medium">@{account.username}</p>}
           <AccountStatus account={account} isLoading={isLoading} />
         </div>
 

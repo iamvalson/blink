@@ -14,6 +14,7 @@ import (
 	"github.com/iamvalson/blink/internal/api/service"
 	"github.com/iamvalson/blink/internal/config"
 	"github.com/iamvalson/blink/internal/connectors"
+	"github.com/iamvalson/blink/internal/connectors/instagram"
 	"github.com/iamvalson/blink/internal/connectors/tiktok"
 	"github.com/iamvalson/blink/internal/connectors/twitter"
 	"github.com/iamvalson/blink/internal/connectors/youtube"
@@ -150,6 +151,11 @@ func run(ctx context.Context) error {
 		connectors.PlatformTwitter: twitterConnector,
 		connectors.PlatformYoutube: youtubeConnector,
 		connectors.PlatformTikTok:  tiktokConnector,
+	}
+
+	if ig := instagram.New(cfg.Instagram); ig != nil {
+		platformConnectors[instagram.Platform] = ig
+		go tokenManager.MaintainInstagramTokens(ctx, ig)
 	}
 
 	// Create worker server

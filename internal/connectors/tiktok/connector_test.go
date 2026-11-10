@@ -89,6 +89,13 @@ func TestConnector_SetAccessToken(t *testing.T) {
 func TestConnector_Authenticate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v2/user/info/" {
+			if r.Header.Get("Authorization") != "Bearer test-access-token" || r.URL.Query().Get("fields") != "open_id,display_name,avatar_url" {
+				t.Error("profile request did not use the granted basic scope")
+			}
+			_, _ = w.Write([]byte(`{"data":{"user":{"open_id":"tiktok-user-123","display_name":"Test Creator","avatar_url":"https://cdn.example/tiktok.jpg"}},"error":{"code":"ok"}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{
 			"access_token": "test-access-token",
 			"refresh_token": "test-refresh-token",
@@ -106,12 +113,29 @@ func TestConnector_Authenticate(t *testing.T) {
 		RedirectURI:  "http://localhost/callback",
 	})
 	conn.oauthConfig.Endpoint.TokenURL = server.URL
+	conn.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "open.tiktokapis.com" {
+			redirect, err := http.NewRequestWithContext(r.Context(), r.Method, server.URL+r.URL.RequestURI(), nil)
+			if err != nil {
+				return nil, err
+			}
+			redirect.Header = r.Header.Clone()
+			r = redirect
+		}
+		return server.Client().Transport.RoundTrip(r)
+	})}
 
 	res, err := conn.Authenticate(context.Background(), connectors.AuthParams{Code: "auth-code"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if res.AvatarURL != "https://cdn.example/tiktok.jpg" {
+		t.Errorf("unexpected avatar URL: %q", res.AvatarURL)
+	}
+	if res.Username != "Test Creator" {
+		t.Fatalf("missing TikTok display name: %q", res.Username)
+	}
 	if res.PlatformUserID != "tiktok-user-123" {
 		t.Errorf("expected PlatformUserID tiktok-user-123, got %s", res.PlatformUserID)
 	}

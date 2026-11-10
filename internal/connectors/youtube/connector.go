@@ -99,8 +99,17 @@ func (c *Connector) Authenticate(
 
 	c.accessToken = token.AccessToken
 
+	var avatarURL string
+	for _, size := range []string{"medium", "default", "high"} {
+		if avatarURL = channel.Snippet.Thumbnails[size].URL; avatarURL != "" {
+			break
+		}
+	}
+
 	return connectors.AuthResult{
 		PlatformUserID: channel.ID,
+		Username:       channel.Snippet.Title,
+		AvatarURL:      avatarURL,
 		AccessToken:    token.AccessToken,
 		RefreshToken:   token.RefreshToken,
 		Expiry:         token.Expiry,

@@ -1,12 +1,13 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { siX, siYoutube, siTiktok } from "simple-icons";
+import { siX, siYoutube, siTiktok, siInstagram } from "simple-icons";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export type Platform = "twitter" | "youtube" | "tiktok";
+import type { Platform } from "@/types/platform";
+export type { Platform };
 
 type PlatformSelectorProps = {
   selectedPlatforms: Platform[];
@@ -38,6 +39,7 @@ const platforms: {
     description: "Upload to TikTok",
     icon: siTiktok,
   },
+  { id: "instagram", name: "Instagram", description: "Publish to Instagram", icon: siInstagram },
 ];
 
 export function PlatformSelector({

@@ -36,6 +36,9 @@ func (s *AccountsService) ListAccounts(ctx context.Context, userID string) ([]*m
 }
 
 func (s *AccountsService) DisconnectAccount(ctx context.Context, userID string, platform string) error {
+	if platform == "instagram" {
+		return s.accounts.RevokeAndDeleteAccount(ctx, userID, platform, func(string, *string) error { return nil })
+	}
 	switch platform {
 	case connectors.PlatformTwitter, connectors.PlatformYoutube, connectors.PlatformTikTok:
 	default:

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getTikTokCreatorInfo } from "@/features/posts/api/tiktok-creator-info";
 import { emptyTikTokOptions, effectiveTikTokOptions, validateTikTokPost, type TikTokOptions } from "@/features/posts/utils/tiktok-validator";
+import type { InstagramFormat } from "@/types/post";
 import { TikTokSettings } from "./tiktok-settings";
 import { useAccounts } from "@/features/accounts/hooks/use-accounts";
 import { createPost, retryPost } from "@/features/posts/api/create-post";
@@ -20,6 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } f
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 
+import { InstagramPreparedPhoto, useInstagramMedia } from "./instagram-feed-photo";
 import { MediaUploader, type MediaFile } from "./media-uploader";
 import { PlatformSelector, type Platform } from "./platform-selector";
 import { PostPreview } from "./post-preview";
@@ -40,13 +42,14 @@ import {
 
 const captionSettings: Record<Platform, { name: string; limit: number }> = {
   twitter: { name: "X", limit: 280 },
+  instagram: { name: "Instagram", limit: 2200 },
   tiktok: { name: "TikTok", limit: 2200 },
   youtube: { name: "YouTube", limit: 5000 },
 };
 
 function captionError(platform: Platform, caption: string) {
   const { name, limit } = captionSettings[platform];
-  if (!caption.trim()) return `Add a caption for ${name}.`;
+  if (!caption.trim() && platform !== "instagram") return `Add a caption for ${name}.`;
   if (caption.trim().length > limit) return `${name} captions can contain up to ${limit} characters.`;
   return null;
 }
@@ -72,7 +75,7 @@ export function PostComposer() {
             .map((account) => account.platform)
             .filter(
               (platform): platform is Platform =>
-                platform === "twitter" || platform === "youtube" || platform === "tiktok",
+                platform === "twitter" || platform === "youtube" || platform === "tiktok" || platform === "instagram",
             ),
         ),
       ),
@@ -89,6 +92,7 @@ export function PostComposer() {
   const [tikTokAccount, setTikTokAccount] = useState("");
   const [tikTokChoices, setTikTokChoices] = useState<Record<string,TikTokOptions>>({});
   const [selectedPlatforms, setSelectedPlatforms] = useState<Platform[]>([]);
+  const [instagramFormat, setInstagramFormat] = useState<InstagramFormat>("IMAGE");
   const [media, setMedia] = useState<MediaFile[]>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [youtubeFormat, setYoutubeFormat] = useState<ContentFormat>("VIDEO");
@@ -98,7 +102,8 @@ export function PostComposer() {
   const [videoValidationState, setVideoValidation] = useState<VideoValidationResult | null>(null);
   const [isValidatingVideo, setIsValidatingVideo] = useState(false);
   const [validatingFileName, setValidatingFileName] = useState<string | undefined>(undefined);
-  const activeValidationAbortRef = useRef<AbortController | null>(null);
+  const videoValidations = useRef(new Map<string, AbortController>());
+  const latestVideoValidation = useRef<string | null>(null);
 
   const videoValidation = useMemo(() => videoMetadata ? validateVideoForFormat(videoMetadata,youtubeFormat) : videoValidationState,[videoMetadata,youtubeFormat,videoValidationState]);
 
@@ -162,13 +167,43 @@ export function PostComposer() {
     return account ? [{ platform, id: account.id }] : [];
   });
   const targets = selectedTargets.map(({ id }) => id);
+  const instagramTarget = selectedTargets.find(target => target.platform === "instagram");
+  const isInstagramReel = Boolean(instagramTarget && instagramFormat === "REELS");
+  const instagramFormats = instagramTarget ? { [instagramTarget.id]: instagramFormat } : undefined;
+  const instagramInputError = instagramTarget && validateInstagramMedia(
+    instagramFormat, media.map(item => item.file.type), resolvedSelectedPlatforms.length,
+  );
+  const instagramPreparation = useInstagramMedia(media, instagramFormat, Boolean(instagramTarget && !instagramInputError));
+  const uploadedInstagramPhotos = useRef(new WeakMap<File, string>());
+  const instagramError = instagramInputError ?? instagramPreparation.error;
+
+  async function uploadInstagramAttachments(originalIds: string[]) {
+    const items = instagramPreparation.items;
+    if (!items?.some(item => item.photo)) return undefined;
+    const ids = [...originalIds];
+    for (const item of items) {
+      const file = item.photo?.file;
+      if (!file) continue;
+      let id = uploadedInstagramPhotos.current.get(file);
+      if (!id) {
+        try {
+          ({ id } = await uploadMedia(file));
+        } catch (error) {
+          throw new Error(`Instagram item ${item.index + 1}: ${error instanceof Error ? error.message : "upload failed"}`);
+        }
+        uploadedInstagramPhotos.current.set(file, id);
+      }
+      ids[item.index] = id;
+    }
+    return ids;
+  }
   const captionOverridesPayload: Record<string, string> = {};
   for (const { id, platform } of selectedTargets) {
     const override = captionOverrides[platform];
     if (!sendToTikTokInbox && override !== undefined) captionOverridesPayload[id] = override.trim();
   }
   const captionErrors = sendToTikTokInbox ? [] : selectedTargets.flatMap(({ platform }) => {
-    const error = captionError(platform, captionOverrides[platform] ?? caption);
+    const error = platform === "instagram" && instagramFormat === "STORIES" ? null : captionError(platform, captionOverrides[platform] ?? caption);
     return error ? [{ platform, error }] : [];
   });
   const activePreview = previewPlatform && resolvedSelectedPlatforms.includes(previewPlatform)
@@ -295,9 +330,9 @@ export function PostComposer() {
       }
 
       // Video file: extract metadata and validate locally in browser before uploading
-      activeValidationAbortRef.current?.abort();
       const controller = new AbortController();
-      activeValidationAbortRef.current = controller;
+      videoValidations.current.set(localId, controller);
+      latestVideoValidation.current = localId;
 
       // Reset previous validation and set validating state
       setVideoMetadata(null);
@@ -308,7 +343,7 @@ export function PostComposer() {
       setMedia((prev) =>
         prev.map((item) =>
           item.id === localId
-            ? { ...item, uploadStatus: "idle", error: undefined }
+            ? { ...item, uploadStatus: "uploading", uploadProgress: 0, error: undefined }
             : item,
         ),
       );
@@ -317,11 +352,11 @@ export function PostComposer() {
         .then((meta) => {
           if (controller.signal.aborted) return;
 
-          setIsValidatingVideo(false);
-          setVideoMetadata(meta);
-
-          const validationRes = validateVideoForFormat(meta, youtubeFormat);
-          setVideoValidation(validationRes);
+          if (latestVideoValidation.current === localId) {
+            setIsValidatingVideo(false);
+            setVideoMetadata(meta);
+            setVideoValidation(validateVideoForFormat(meta, youtubeFormat));
+          }
 
           // Mark upload as starting
           setMedia((prev) =>
@@ -376,12 +411,11 @@ export function PostComposer() {
               ? err.message
               : "Failed to read video dimensions or duration.";
 
-          setIsValidatingVideo(false);
-          setVideoMetadata(null);
-          setVideoValidation({
-            status: "error",
-            error: errMsg,
-          });
+          if (latestVideoValidation.current === localId) {
+            setIsValidatingVideo(false);
+            setVideoMetadata(null);
+            setVideoValidation({ status: "error", error: errMsg });
+          }
 
           // Mark media item as error and PREVENT uploading
           setMedia((prev) =>
@@ -393,14 +427,16 @@ export function PostComposer() {
           );
 
           toast.error(`Video validation error: ${errMsg}`);
-        });
+        })
+        .finally(() => videoValidations.current.delete(localId));
     },
     [youtubeFormat],
   );
 
   const handleRemoveFile = useCallback((item: MediaFile) => {
-    if (item.file.type.startsWith("video/")) {
-      activeValidationAbortRef.current?.abort();
+    videoValidations.current.get(item.id)?.abort();
+    if (latestVideoValidation.current === item.id) {
+      latestVideoValidation.current = null;
       setVideoMetadata(null);
       setVideoValidation(null);
       setIsValidatingVideo(false);
@@ -416,6 +452,7 @@ export function PostComposer() {
   const handlePublish = async () => {
     if (isLoadingAccounts) return;
     if (tikTokError) { toast.error(tikTokError); return; }
+    if (instagramError) { toast.error(instagramError); return; }
     if (phase === "submitting") return; // prevent double submit
 
     if (connectedAccounts.length === 0) {
@@ -501,6 +538,8 @@ export function PostComposer() {
         media_ids: mediaIds.length > 0 ? mediaIds : null,
         content_format: contentFormat,
         tiktok_options: tikTokPayload,
+        instagram_formats: instagramFormats,
+        instagram_media_ids: await uploadInstagramAttachments(mediaIds),
       });
 
       setSubmittedPost(post);
@@ -537,6 +576,7 @@ export function PostComposer() {
     // Run same validations as handlePublish
     if (isLoadingAccounts) return;
     if (tikTokError) { toast.error(tikTokError); return; }
+    if (instagramError) { toast.error(instagramError); return; }
     if (connectedAccounts.length === 0) {
       toast.error("Connect a social account before scheduling.");
       return;
@@ -613,6 +653,8 @@ export function PostComposer() {
         media_ids: mediaIds.length > 0 ? mediaIds : null,
         content_format: contentFormat,
         tiktok_options: tikTokPayload,
+        instagram_formats: instagramFormats,
+        instagram_media_ids: await uploadInstagramAttachments(mediaIds),
         scheduled_at: isoDate,
       });
 
@@ -632,7 +674,9 @@ export function PostComposer() {
   const handleReset = () => {
     // Only reset after a terminal state
     if (phase !== "published" && phase !== "failed" && phase !== "partial" && phase !== "scheduled") return;
-    activeValidationAbortRef.current?.abort();
+    for (const controller of videoValidations.current.values()) controller.abort();
+    videoValidations.current.clear();
+    latestVideoValidation.current = null;
     setVideoMetadata(null);
     setVideoValidation(null);
     setIsValidatingVideo(false);
@@ -644,6 +688,8 @@ export function PostComposer() {
     setSelectedPlatforms([]);
     setMedia([]);
     setYoutubeFormat("VIDEO");
+    setInstagramFormat("IMAGE");
+    uploadedInstagramPhotos.current = new WeakMap();
     setTikTokChoices({});
     setTikTokInboxAccount("");
     setTikTokInboxConsentMedia(null);
@@ -723,6 +769,28 @@ export function PostComposer() {
                 </div>
               )}
             </div>
+
+            {instagramTarget && (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium">Instagram format
+                  <select
+                    value={instagramFormat}
+                    disabled={isDisabled}
+                    onChange={(event) => setInstagramFormat(event.target.value as InstagramFormat)}
+                    className="mt-1 block min-h-11 w-full rounded border bg-background p-2"
+                  >
+                    <option value="IMAGE">Feed photo</option>
+                    <option value="REELS">Reel</option>
+                    <option value="CAROUSEL">Carousel</option>
+                    <option value="STORIES">Story (eligible accounts)</option>
+                  </select>
+                </label>
+                {instagramFormat === "CAROUSEL" && <p className="text-sm text-muted-foreground">Carousel photos use a square frame. Place a photo first to keep that frame when mixing photos and videos.</p>}
+                {instagramFormat === "STORIES" && <p className="text-sm text-muted-foreground">Instagram Stories use the media without a caption.</p>}
+                {instagramPreparation.items?.map(item => <InstagramPreparedPhoto key={item.id} item={item} disabled={isDisabled} />)}
+                {instagramError && <p className="text-sm text-muted-foreground" role="status">{instagramError}</p>}
+              </div>
+            )}
 
             {isTikTokSelected && <>
               <label className="block text-sm font-medium">TikTok account
@@ -837,7 +905,12 @@ export function PostComposer() {
               onUpload={handleUploadFile}
               onRemove={handleRemoveFile}
               disabled={isDisabled}
-              addBlockedReason={isXSelected ? xAddBlockedReason : null}
+              maxFiles={isInstagramReel ? 1 : undefined}
+              accept={isInstagramReel ? "video/mp4,video/quicktime,.mp4,.mov" : undefined}
+              fileHint={isInstagramReel ? "One MP4 or MOV video" : undefined}
+              addBlockedReason={isInstagramReel && media.length > 0
+                ? (media.length > 1 ? "Remove extra attachments to use one video for this Reel." : "Instagram Reels use one video. Remove it to add a replacement.")
+                : isXSelected ? xAddBlockedReason : null}
             />
 
             {/* X (Twitter) media constraint violation inline card */}
@@ -910,7 +983,7 @@ export function PostComposer() {
                 variant="outline"
                 onClick={() => setScheduleOpen(true)}
                 className="min-h-11 flex-1 sm:flex-none"
-                disabled={isDisabled || sendToTikTokInbox || Boolean(tikTokError) || captionErrors.length > 0}
+                disabled={isDisabled || sendToTikTokInbox || Boolean(tikTokError || instagramError) || captionErrors.length > 0}
               >
                 <CalendarClock className="mr-2 h-4 w-4" />
                 Schedule
@@ -922,7 +995,7 @@ export function PostComposer() {
                 disabled={
                   isDisabled ||
                   isRetrying ||
-                  (phase !== "failed" && phase !== "partial" && (Boolean(tikTokError) || captionErrors.length > 0)) ||
+                  (phase !== "failed" && phase !== "partial" && (Boolean(tikTokError || instagramError) || captionErrors.length > 0)) ||
                   hasUploadingMedia ||
                   connectedAccounts.length === 0
                 }
@@ -954,7 +1027,11 @@ export function PostComposer() {
           )}
           <PostPreview
             caption={sendToTikTokInbox ? "" : (activePreview ? captionOverrides[activePreview] ?? caption : caption).trim()}
-            media={media}
+            media={activePreview === "instagram" ? media.flatMap((item, index) => {
+              if (item.file.type.startsWith("video/")) return [item];
+              const photo = instagramPreparation.items?.[index]?.photo;
+              return photo ? [{ ...item, ...photo }] : [];
+            }) : media}
             platforms={activePreview ? [activePreview] : []}
           />
         </div>
@@ -1010,4 +1087,24 @@ export function PostComposer() {
       />
     </>
   );
+}
+
+
+function validateInstagramMedia(format: InstagramFormat, types: string[], targets: number): string | null {
+  const isVideo = (type: string) => type === "video/mp4" || type === "video/quicktime";
+  const isPhoto = (type: string) => ["image/jpeg", "image/png", "image/webp"].includes(type);
+  if (format === "CAROUSEL") {
+    if (targets !== 1) return "Select Instagram only to publish a carousel.";
+    if (types.length < 2 || types.length > 10) return "Add 2–10 photos or MP4/MOV videos in publishing order.";
+    if (types.some(type => !isPhoto(type) && !isVideo(type))) return "Instagram carousels accept JPEG, PNG, or WebP photos and MP4/MOV videos.";
+  } else if (types.length !== 1) {
+    return format === "REELS" ? "Instagram Reels require exactly one MP4 or MOV video." : "Add one media attachment for this Instagram format.";
+  } else if (format === "IMAGE" && !isPhoto(types[0])) {
+    return "Add a JPEG, PNG, or WebP photo for the Instagram feed.";
+  } else if (format === "REELS" && !isVideo(types[0])) {
+    return "Add an MP4 or MOV video for the Reel.";
+  } else if (format === "STORIES" && !isPhoto(types[0]) && !isVideo(types[0])) {
+    return "Add a JPEG, PNG, or WebP photo or an MP4/MOV video for the Story.";
+  }
+  return null;
 }

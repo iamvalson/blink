@@ -15,7 +15,8 @@ import (
 )
 
 type AccountsHandler struct {
-	service *service.AccountsService
+	service            *service.AccountsService
+	InstagramAvailable bool
 }
 
 func NewAccountsHandler(svc *service.AccountsService) *AccountsHandler {
@@ -23,7 +24,8 @@ func NewAccountsHandler(svc *service.AccountsService) *AccountsHandler {
 }
 
 type listAccountsResponse struct {
-	Accounts []*model.SocialAccount `json:"accounts"`
+	InstagramAvailable bool                   `json:"instagram_available,omitempty"`
+	Accounts           []*model.SocialAccount `json:"accounts"`
 }
 
 func (h *AccountsHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +47,7 @@ func (h *AccountsHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(listAccountsResponse{Accounts: accounts}); err != nil {
+	if err := json.NewEncoder(w).Encode(listAccountsResponse{Accounts: accounts, InstagramAvailable: h.InstagramAvailable}); err != nil {
 		log.Error().Err(err).Str("user_id", userID).Msg("Failed to encode account list")
 	}
 }

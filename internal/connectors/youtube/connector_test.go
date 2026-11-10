@@ -85,7 +85,8 @@ func TestConnector_Authenticate(t *testing.T) {
 						"id": "channel-123",
 						"snippet": {
 							"title": "My Test Channel",
-							"description": "Channel description"
+							"description": "Channel description",
+ "thumbnails":{"medium":{"url":"https://cdn.example/youtube.jpg"}}
 						}
 					}
 				]
@@ -114,6 +115,12 @@ func TestConnector_Authenticate(t *testing.T) {
 		t.Errorf("expected channel info endpoint to be called")
 	}
 
+	if res.AvatarURL != "https://cdn.example/youtube.jpg" {
+		t.Errorf("unexpected avatar URL: %q", res.AvatarURL)
+	}
+	if res.Username != "My Test Channel" {
+		t.Errorf("account name = %q, want %q", res.Username, "My Test Channel")
+	}
 	if res.PlatformUserID != "channel-123" {
 		t.Errorf("expected platform user ID 'channel-123', got '%s'", res.PlatformUserID)
 	}

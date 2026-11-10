@@ -132,6 +132,7 @@ func (r *MediaRepository) IsReferencedByPost(ctx context.Context, id uuid.UUID) 
 	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM posts WHERE media_id = $1
+            UNION ALL SELECT 1 FROM instagram_post_media WHERE media_id = $1
 		)
 	`, id).Scan(&exists)
 	if err != nil {

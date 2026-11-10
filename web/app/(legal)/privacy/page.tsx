@@ -30,9 +30,8 @@ export default function PrivacyPage() {
             account identifiers, permissions and authorisation tokens. We use these with the
             captions, media, destinations and schedules you provide to carry out your publishing
             requests under our agreement. Connecting an account and uploading content are optional
-            until you choose to use those features. Disconnecting an account in Blink revokes its saved
-            authorization with the platform and removes the connection and its associated publishing
-            records from Blink.
+            until you choose to use those features. Disconnecting an account removes its saved
+            credentials, connection and associated publishing records from Blink.
           </li>
           <li>
             <strong>Security and operation.</strong> We use technical request and job information
@@ -71,12 +70,29 @@ export default function PrivacyPage() {
       </section>
 
       <section>
+        <h2>Instagram</h2>
+        <p>
+          Blink stores your connected professional account identifiers, username and encrypted
+          access token. When you publish or schedule content, Blink sends your selected media
+          and applicable caption to Instagram. Blink uses Instagram media identifiers,
+          processing status and publication links to report the result.
+        </p>
+        <p className="mt-3">
+          Disconnect Instagram on the Accounts page to remove the connection and its
+          publishing records from Blink. Revoke the grant in Instagram&apos;s connected apps
+          settings. To request deletion of Instagram data held by Blink, use Meta&apos;s data
+          deletion controls or email{" "}
+          <a href={"mailto:" + PRIVACY_EMAIL}>{PRIVACY_EMAIL}</a>.
+        </p>
+      </section>
+
+      <section>
         <h2>Who receives data</h2>
         <ul>
           <li>Hosting and infrastructure providers process the information needed to operate the app, database and publishing queues.</li>
           <li>Cloudflare R2 stores uploaded media when Blink uses its cloud storage configuration.</li>
           <li>Resend delivers password reset emails when you request one.</li>
-          <li>X, Google/YouTube and TikTok receive the information needed for the connections and publishing actions you choose. Once content is published, the platform handles it under its own privacy rules and the visibility settings on that platform.</li>
+          <li>X, Google/YouTube, TikTok and Instagram receive the information needed for the connections and publishing actions you choose. Once content is published, the platform handles it under its own privacy rules and the visibility settings on that platform.</li>
           <li>We may disclose relevant data to a competent authority where the law requires it.</li>
         </ul>
       </section>

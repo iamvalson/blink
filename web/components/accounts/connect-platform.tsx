@@ -13,12 +13,13 @@ interface ConnectPlatformProps {
   isLoading?: boolean;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 const OAUTH_PATHS: Record<Platform, string> = {
   twitter: "/auth/twitter",
   youtube: "/auth/youtube",
   tiktok: "/auth/tiktok",
+  instagram: "/auth/instagram",
 };
 
 export function ConnectPlatform({

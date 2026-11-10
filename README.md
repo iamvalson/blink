@@ -37,7 +37,7 @@ Blink also features real-time Server-Sent Events (SSE) status streaming, direct-
                                                      |
                                                      v
                                           Platform Connectors
-                                      (Twitter/X, YouTube, etc.)
+                                      (X, YouTube, TikTok, Instagram)
 ```
 
 - **API (`cmd/api`)**: Owns authentication, input validation, post persistence, outbox event generation, scheduled post claiming, media presigned URL generation, and SSE status streaming.
@@ -51,14 +51,16 @@ Blink also features real-time Server-Sent Events (SSE) status streaming, direct-
 ## Key Features
 
 - **Multi-Platform Publishing Connectors**:
-  - **Twitter/X**: Text tweets, single/multi-image posts, and chunked video uploads with asynchronous server-side processing checks.
+  - **Twitter/X**: Text posts and image or video publishing.
   - **YouTube**: Video uploads with resumable direct publishing via YouTube Data API v3.
-  - **Mock Mode**: Offline publishing emulator for local development and integration tests.
+  - **TikTok**: Video publishing and delivery to the TikTok inbox, depending on account and app access.
+  - **Instagram**: Feed photos, Reels, carousels, and Stories for eligible professional accounts. Blink prepares Instagram JPEGs and preserves original media for other destinations.
+  - **Mock Mode**: Offline publishing emulator for the X connector.
 - **Durable Reliability Engine**:
   - **Transactional Outbox Pattern**: Guaranteed dispatch from PostgreSQL to Redis without dual-write inconsistencies.
   - **Bounded Business Retries**: Exponential backoff with jitter and respect for platform-provided `Retry-After` headers.
   - **Ambiguous Result Reconciliation**: External timeouts or network hiccups marked `UNKNOWN` and reconciled before duplicating external posts.
-  - **Dead-Letter Queue (DLQ)**: Terminal failures persisted in `failed_publications` and `publication_errors` tables for observability and replay.
+  - **Dead-Letter Queue (DLQ)**: Terminal failures persisted in `dead_letter_jobs` and `publication_attempt_failures` tables for observability and replay.
   - **Automatic OAuth 2.0 Refresh**: Encrypted token storage (AES-256-GCM) with proactive token expiration checks and refresh flows.
 - **Post Scheduling & Content Calendar**:
   - Schedule posts with future timestamps (`scheduled_at`).
@@ -72,7 +74,7 @@ Blink also features real-time Server-Sent Events (SSE) status streaming, direct-
   - Presigned direct upload workflow to Cloudflare R2 (or any S3-compatible service) bypassing server bandwidth limits.
   - Local disk storage driver for development and offline testing.
   - Supports large file uploads (up to 2 GiB) with MIME-type and size validation.
-- **Enterprise-Ready Operations**:
+- **Operations**:
   - Clean graceful shutdown handling `SIGINT` / `SIGTERM` across both API and worker.
   - Prometheus metrics (`/metrics`) tracking publish attempts, latencies, errors, and outbox throughput.
   - Structured JSON logging with Zerolog.
@@ -92,6 +94,8 @@ internal/
   connectors/                 Social platform connector interfaces and implementations
     twitter/                  Twitter/X API v2 & v1.1 chunked media upload
     youtube/                  YouTube Data API v3 video upload
+    tiktok/                   TikTok login and content posting
+    instagram/                Instagram Login and container-based publishing
   jobs/                       Asynq task definitions and payload structures
   log/                        Zerolog logger initialization
   mediastore/                 Media storage drivers (Cloudflare R2 and local filesystem)
@@ -100,7 +104,7 @@ internal/
   outbox/                     Outbox dispatcher and scheduled post claiming engine
   storage/                    PostgreSQL data repositories
   worker/                     Publication processor, retry logic, and DLQ handling
-migrations/                   PostgreSQL schema migrations (000001 - 000010)
+migrations/                   Tracked PostgreSQL schema migrations
 docs/                         Operational guides and technical design documents
 infra/                        Docker Compose files for PostgreSQL and Redis
 web/                          Next.js web application (React 19, Tailwind CSS v4)
@@ -111,10 +115,11 @@ tests/                        Integration test suites
 
 ## Prerequisites
 
-- **Go**: 1.24+ (or Go 1.26)
+- **Go**: 1.26 or newer
 - **Docker & Docker Compose**: For local PostgreSQL and Redis
 - **PostgreSQL Client (`psql`)**: For running database migrations
-- **Node.js & pnpm**: Node.js 20+ and pnpm 10+ for the frontend application
+- **Node.js & pnpm**: Use Node.js 24 and the pnpm version pinned in [`web/package.json`](web/package.json).
+- **FFmpeg**: Install `ffprobe` when running the worker directly to validate Instagram and TikTok videos. The Docker worker includes it.
 
 ---
 
@@ -149,6 +154,12 @@ cp .env.example .env
 | `YOUTUBE_CLIENT_ID`               | *empty*                                            | API / Worker   | Google / YouTube OAuth 2.0 Client ID                              |
 | `YOUTUBE_CLIENT_SECRET`           | *empty*                                            | API / Worker   | Google / YouTube OAuth 2.0 Client Secret                          |
 | `YOUTUBE_CALLBACK_URL`            | *empty*                                            | API / Worker   | Google / YouTube OAuth 2.0 Redirect URI                           |
+| `INSTAGRAM_APP_ID`                | *empty* | API / Worker | Instagram App ID from the Instagram Login setup |
+| `INSTAGRAM_APP_SECRET`            | *empty* | API / Worker | Instagram App Secret from the same setup |
+| `INSTAGRAM_CALLBACK_URL`          | *empty* | API / Worker | Public HTTPS OAuth redirect ending in `/auth/instagram/callback` |
+| `INSTAGRAM_API_VERSION`           | *empty* | API / Worker | Pinned Instagram Graph API version supported by the Meta app |
+| `INSTAGRAM_WEBHOOK_VERIFY_TOKEN`  | *empty* | API | Optional random token shared with Meta for webhook verification |
+| `META_APP_SECRET`                 | *empty* | API | Signing secret of the Meta app that owns the webhook subscription |
 | `MEDIA_STORAGE_DRIVER`            | `local` (dev) / `r2` (prod)                        | API / Worker   | Storage provider (`local` or `r2`)                                |
 | `MEDIA_STORAGE_PATH`              | `./media_uploads`                                  | API / Worker   | Local filesystem upload directory (when driver is `local`)        |
 | `R2_ACCOUNT_ID`                   | *empty*                                            | API / Worker   | Cloudflare Account ID                                             |
@@ -165,6 +176,25 @@ cp .env.example .env
 > ```bash
 > openssl rand -hex 32
 > ```
+
+---
+
+## Instagram Setup
+
+Create a Meta app with Instagram Login and connect a Business or Creator account assigned to the app for testing. Blink requests `instagram_business_basic` and `instagram_business_content_publish`. Configure the four required Instagram values in the table above on both the API and worker. Use R2 for real Instagram media delivery.
+
+Register the following URLs on the public HTTPS host that serves the Blink API.
+
+| Meta setting | Blink endpoint |
+| --- | --- |
+| Business Login OAuth redirect URI | `/auth/instagram/callback` |
+| Deauthorization callback | `/webhooks/instagram/deauthorize` |
+| Data deletion request URL | `/webhooks/instagram/data-deletion` |
+| Event webhook callback, if configured | `/webhooks/instagram` |
+
+Generate the optional webhook verify token with `openssl rand -hex 32`, set `INSTAGRAM_WEBHOOK_VERIFY_TOKEN` and `META_APP_SECRET` on the API, then enter the same verify token under **Configure webhooks** in Meta. Leave client certificate attachment disabled unless your proxy is configured for mutual TLS. Publishing uses container polling and can run without event subscriptions.
+
+Apply pending migrations, start the API and worker, then select **Connect Instagram** in Accounts. Use **Reconnect** for an existing connection to refresh the profile name and image while keeping its post history. See the [Instagram setup guide](docs/instagram-setup.md) for details and live verification steps.
 
 ---
 
@@ -193,11 +223,13 @@ Run the API service:
 make run-api
 ```
 
-In a separate terminal, start the background worker (using mock connector mode for offline development):
+In a separate terminal, start the background worker:
 
 ```bash
-PLATFORM_MODE=mock make run-worker
+make run-worker
 ```
+
+For offline X testing, use `PLATFORM_MODE=mock make run-worker`. Other configured providers can still publish to their live APIs.
 
 The API will listen at `http://localhost:8000` (or the configured `PORT`).
 
@@ -225,7 +257,7 @@ The API will listen at `http://localhost:8000` (or the configured `PORT`).
 
 | Method   | Endpoint                  | Description                                                |
 | -------- | ------------------------- | ---------------------------------------------------------- |
-| `GET`    | `/auth/{platform}`        | Initiate OAuth 2.0 PKCE flow (`RequireAuth`)               |
+| `GET`    | `/auth/{platform}`        | Initiate OAuth for the selected provider (`RequireAuth`)               |
 | `GET`    | `/auth/{platform}/callback`| OAuth 2.0 callback and token exchange                     |
 | `GET`    | `/api/v1/accounts`        | List all linked social accounts for current user           |
 | `DELETE` | `/api/v1/accounts/{platform}` | Disconnect a linked social account                     |
@@ -283,7 +315,7 @@ The API will listen at `http://localhost:8000` (or the configured `PORT`).
                v                  v                  v
         [ Token Check ]    [ Fetch Media ]    [ Platform Publish ]
                |                  |                  |
-        (Refresh if expired) (From R2 / Disk) (Twitter/X or YouTube)
+        (Renew if needed)  (From R2 / Disk) (Selected platform)
                                                      |
                                   +------------------+------------------+
                                   |                                     |
@@ -319,7 +351,8 @@ See the operational documentation for deeper details:
 The web dashboard is built with Next.js 16 (App Router), React 19, Tailwind CSS v4, and TanStack React Query.
 
 Features:
-- **Post Composer**: Multi-platform publishing with live character count validation (Twitter/X 280-char counter, YouTube metadata), image attachments, and video uploads.
+- **Post Composer**: Per-platform captions and media validation. Instagram photos can be prepared from JPEG, PNG, or WebP, with fit and crop previews when framing is needed. Reels accept one video and carousels retain the selected attachment order.
+- **Post Details**: Preview the saved media for each destination, including every carousel item, alongside publishing status, links, and connected profile names and pictures when available.
 - **Real-Time Updates**: Leverages Server-Sent Events (`usePostStatusStream`) to update publishing progress live without polling.
 - **Content Calendar**: Month and agenda views to organize, schedule, reschedule, and delete planned social posts.
 - **Media Uploader**: Client-side media validation for video duration, format, and aspect ratios, with direct upload to Cloudflare R2 via presigned URLs.
@@ -333,13 +366,13 @@ pnpm install
 pnpm dev
 ```
 
-The frontend will be accessible at `http://localhost:3000`. Set `NEXT_PUBLIC_API_URL` in `web/.env.local` to point to your backend API URL (defaults to `http://localhost:8000`).
+The frontend will be accessible at `http://localhost:3000`. Set `NEXT_PUBLIC_API_URL` in `web/.env.local` to your backend API URL, for example `http://localhost:8000` when the API uses its default port.
 
 ---
 
 ## Testing & Quality
 
-Run all unit and integration tests across the repository:
+Run the Go test suite. Database and queue integration tests require the test services described below.
 
 ```bash
 go test ./...
@@ -354,9 +387,20 @@ go vet ./cmd/api ./cmd/worker ./internal/config ./internal/worker ./internal/api
 To run integration tests requiring live databases, set test connection strings:
 
 ```bash
-BLINK_TEST_DATABASE_URL="postgres://blink:devpass@localhost:5432/blink_test?sslmode=disable" \
+BLINK_TEST_DATABASE_URL="postgres://blink:devpass@localhost:5432/blink_db?sslmode=disable" \
 BLINK_TEST_REDIS_URL="redis://localhost:6379" \
 go test -v ./tests/...
+```
+
+To check the frontend and Instagram composer and preview behavior:
+
+```bash
+cd web
+pnpm typecheck
+pnpm test:overview
+pnpm test:tiktok
+node test-instagram-feed-photo.mjs
+node test-media-uploader.mjs
 ```
 
 ---
@@ -378,10 +422,18 @@ make run-worker     # Run Go Worker process locally
 
 ---
 
+## Production Deployment
+
+The [production Compose file](infra/docker-compose.prod.yml) starts PostgreSQL, Redis, the API, and the worker. Its migration service must complete successfully before the API and worker start. Deploy the Next.js frontend separately with `NEXT_PUBLIC_API_URL` set to the public API host at build time.
+
+1. Provide the backend environment in `.env.production.local`. Set the real frontend origin in `FRONTEND_URL` and `CORS_ORIGINS`, configure R2, and persist the API signing key and token encryption key across releases.
+2. Deploy the API behind an HTTPS proxy. Register production callback URLs with each provider. Omit query strings from proxy logs for OAuth callbacks, webhook verification, and signed media URLs.
+3. Apply the tracked migrations before serving traffic. The production Compose migration service handles this step. Back up the database before upgrading an existing deployment.
+4. Start with an Instagram tester account. On the production host, confirm OAuth, feed photos, carousels, a scheduled Reel, Stories if offered, and the deauthorization and data deletion callbacks. Confirm the event webhook separately if you enable it.
+5. Before allowing customer accounts, confirm that the production Meta app has the required permissions and access level. Follow [Meta App Review](https://developers.facebook.com/docs/app-review/) for customer access.
+
+---
+
 ## License
 
 Blink is under active development. See [`LICENSE`](LICENSE) for licensing details.
-
-### Deployment readiness
-
-Worker runtime images include ffprobe for video validation. Authentication signing keys must be stored persistently so API restarts preserve user sessions. Database migrations now track applied versions; existing databases initialized manually must establish migration history before running `make migrate-up`. Never run a rollback while publishing jobs are active.

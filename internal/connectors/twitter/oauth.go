@@ -143,6 +143,9 @@ func GetUserInfo(ctx context.Context, token *oauth2.Token, client ...*http.Clien
 	if err != nil {
 		return nil, err
 	}
+	fields := req.URL.Query()
+	fields.Set("user.fields", "profile_image_url")
+	req.URL.RawQuery = fields.Encode()
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 

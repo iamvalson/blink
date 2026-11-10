@@ -28,7 +28,7 @@ const shared = {
 const post = {
   id: "post-123", caption: "A post with full details", title: "Launch update", status: "SCHEDULED", content_format: "VIDEO",
   created_at: "2026-11-01T10:00:00Z", updated_at: "2026-11-02T10:00:00Z", scheduled_at: "2026-11-10T10:00:00Z",
-  targets: [{ id: "target-1", platform: "youtube", platform_user_id: "creator", status: "PENDING" }],
+  targets: [{ id: "target-1", platform: "youtube", platform_user_id: "channel-id", platform_username: "creator", status: "PENDING" }],
 };
 const ready = data => ({ data, isPending: false, isError: false, refetch() {} });
 let mode = "ready";
@@ -71,12 +71,19 @@ assert.match(html, /Could not load scheduled posts/);
 assert.match(html, /Could not load accounts/);
 
 const cards = Object.fromEntries(["Card", "CardContent", "CardHeader"].map(name => [name, ({ children, ...props }) => React.createElement("div", props, children)]));
-const previewComponent = load("./components/posts/post-preview.tsx", { "@/components/ui/card": cards });
+const platformDefinitions = load("./types/platform.ts", {});
+const platformIcon = load("./components/accounts/platform-icon.tsx", {});
+const previewComponent = load("./components/posts/post-preview.tsx", {
+  "@/components/ui/card": cards,
+  "@/components/accounts/platform-icon": platformIcon,
+  "@/types/platform": platformDefinitions,
+});
 let mediaQuery = ready({ content_type: "video/mp4", upload_status: "complete" });
 const previewModule = load("./features/posts/components/post-details-preview.tsx", {
   "@tanstack/react-query": { useQuery: () => mediaQuery },
   "@/lib/api/client": { apiClient() {} },
   "@/components/posts/post-preview": previewComponent,
+  "@/types/platform": platformDefinitions,
 });
 const renderPreview = value => renderToStaticMarkup(React.createElement(previewModule.PostDetailsPreview, { post: value }));
 let previewHtml = renderPreview({ ...post, media_id: "uploaded-media" });
@@ -106,6 +113,55 @@ mediaQuery = { isError: true };
 assert.match(renderPreview({ ...post, media_id: "unavailable" }), /Retry media/);
 mediaQuery = ready({ content_type: "image/png", upload_status: "pending" });
 assert.match(renderPreview({ ...post, media_id: "pending" }), /not available for preview/);
+
+const carouselPost = {
+  ...post,
+  media_id: "original-upload",
+  targets: [{ id: "ig-target", platform: "instagram", instagram_format: "CAROUSEL", platform_user_id: "17841400000001234", platform_username: "ig-creator", platform_avatar_url: "https://cdn.example/ig-avatar.jpg" }],
+  instagram_media: Array.from({ length: 6 }, (_, position) => ({
+    position,
+    ...(position === 2 ? {} : {
+      media_id: `carousel-${position}`,
+      content_type: position === 1 ? "video/mp4" : "image/jpeg",
+    }),
+  })),
+};
+const carouselHtml = renderPreview(carouselPost);
+assert.match(carouselHtml, /Content preview for Instagram/);
+assert.match(carouselHtml, /ig-creator/);
+assert.match(carouselHtml, /<img[^>]*src="https:\/\/cdn.example\/ig-avatar.jpg"[^>]*referrerPolicy="no-referrer"/i);
+const avatarMissing = renderPreview({ ...carouselPost, targets: [{ ...carouselPost.targets[0], platform_avatar_url: undefined }] });
+assert.doesNotMatch(avatarMissing, /ig-avatar.jpg/);
+assert.match(avatarMissing, />I<\/div>/);
+assert.doesNotMatch(carouselHtml, /Content preview for X|original-upload|17841400000001234/);
+const usernameMissing = renderPreview({ ...carouselPost, targets: [{ ...carouselPost.targets[0], platform_username: undefined }] });
+assert.match(usernameMissing, /Your account/);
+assert.doesNotMatch(usernameMissing, /17841400000001234/);
+assert.match(carouselHtml, /<video[^>]*carousel-1\/content/);
+assert.match(carouselHtml, /Attachment 3 is unavailable/);
+assert.match(carouselHtml, /carousel-0\/content[\s\S]*carousel-1\/content[\s\S]*carousel-3\/content[\s\S]*carousel-5\/content/);
+const crossPost = renderPreview({ ...carouselPost, targets: [...carouselPost.targets, { platform: "twitter" }] });
+assert.match(crossPost, /aria-pressed="true"[^>]*>Instagram/);
+assert.match(crossPost, /aria-pressed="false"[^>]*>X/);
+assert.doesNotMatch(renderPreview({ ...post, targets: [] }), /Content preview for X/);
+
+const dropdown = Object.fromEntries(["DropdownMenu", "DropdownMenuContent", "DropdownMenuItem", "DropdownMenuSeparator", "DropdownMenuTrigger"]
+  .map(name => [name, ({ children }) => React.createElement("div", null, children)]));
+const postsList = load("./features/posts/components/posts-list.tsx", {
+  ...shared,
+  "next/navigation": { useRouter: () => ({}) },
+  "@tanstack/react-query": { useQueryClient: () => ({}) },
+  "@/features/posts/api/create-post": {},
+  "@/features/posts/hooks/use-posts": { usePosts: () => ready({ posts: [carouselPost], total: 1 }) },
+  "@/features/posts/hooks/use-post-status-stream": { usePostStatusStream() {} },
+  "@/components/accounts/platform-icon": platformIcon,
+  "@/types/platform": platformDefinitions,
+  "@/components/ui/dropdown-menu": dropdown,
+  "@/components/posts/reschedule-post-dialog": { ReschedulePostDialog: () => null },
+});
+const listHtml = render(postsList.PostsList);
+assert.match(listHtml, /<svg[^>]*aria-label="Instagram"[^>]*>\s*<path d="/);
+assert.match(listHtml, /<option value="instagram">Instagram<\/option>/);
 
 let query = ready(post);
 let mutation;

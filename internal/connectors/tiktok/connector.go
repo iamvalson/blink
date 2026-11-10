@@ -76,8 +76,11 @@ func (c *Connector) Authenticate(ctx context.Context, params connectors.AuthPara
 
 	c.accessToken = token.AccessToken
 
+	name, avatarURL := connectedAccountProfile(ctx, c.httpClient, token, openID)
 	return connectors.AuthResult{
 		PlatformUserID: openID,
+		Username:       name,
+		AvatarURL:      avatarURL,
 		AccessToken:    token.AccessToken,
 		RefreshToken:   token.RefreshToken,
 		Expiry:         token.Expiry,

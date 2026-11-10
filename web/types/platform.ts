@@ -1,4 +1,4 @@
-export type Platform = "twitter" | "youtube" | "tiktok";
+export type Platform = "twitter" | "youtube" | "tiktok" | "instagram";
 
 export type PlatformStatus = "connected" | "disconnected" | "error";
 
@@ -24,4 +24,5 @@ export const PLATFORMS: PlatformDefinition[] = [
     name: "TikTok",
     description: "Publish videos to TikTok.",
   },
+  { id: "instagram", name: "Instagram", description: "Publish to an Instagram Business or Creator account." },
 ];

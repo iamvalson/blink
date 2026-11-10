@@ -51,7 +51,7 @@ export function AccountsList() {
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {PLATFORMS.map((platform) => {
+      {PLATFORMS.filter(platform => platform.id !== "instagram" || data?.instagram_available || accounts.some(account => account.platform === "instagram")).map((platform) => {
         const account = accounts.find((item) => item.platform === platform.id);
 
         return (

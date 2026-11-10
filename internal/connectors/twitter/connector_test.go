@@ -58,7 +58,7 @@ func TestConnector_Authenticate_Success(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":{"id":"tw-user-777","name":"Auth User","username":"authuser"}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"tw-user-777","name":"Auth User","username":"authuser","profile_image_url":"https://cdn.example/x.jpg"}}`))
 			return
 		}
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
@@ -89,6 +89,12 @@ func TestConnector_Authenticate_Success(t *testing.T) {
 	}
 	if !calledUser {
 		t.Error("expected user info endpoint to be called")
+	}
+	if res.AvatarURL != "https://cdn.example/x.jpg" {
+		t.Errorf("unexpected avatar URL: %q", res.AvatarURL)
+	}
+	if res.Username != "authuser" {
+		t.Errorf("account name = %q, want %q", res.Username, "authuser")
 	}
 	if res.PlatformUserID != "tw-user-777" {
 		t.Errorf("PlatformUserID = %s, want tw-user-777", res.PlatformUserID)

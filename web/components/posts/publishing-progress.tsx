@@ -11,7 +11,7 @@ import {
   RefreshCcw,
 } from "lucide-react";
 import Link from "next/link";
-import { siYoutube, siX, siTiktok } from "simple-icons";
+import { PlatformIcon } from "@/components/accounts/platform-icon";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 interface PublishingProgressProps {
@@ -21,49 +21,10 @@ interface PublishingProgressProps {
   showDetailsLink?: boolean;
 }
 
-function PlatformIcon({ platform }: { platform: string }) {
-  if (platform === "youtube") {
-    return (
-      <svg
-        role="img"
-        viewBox="0 0 24 24"
-        className="h-3.5 w-3.5 fill-current"
-        aria-hidden
-      >
-        <path d={siYoutube.path} />
-      </svg>
-    );
-  }
-  if (platform === "twitter") {
-    return (
-      <svg
-        role="img"
-        viewBox="0 0 24 24"
-        className="h-3.5 w-3.5 fill-current"
-        aria-hidden
-      >
-        <path d={siX.path} />
-      </svg>
-    );
-  }
-  if (platform === "tiktok") {
-    return (
-      <svg
-        role="img"
-        viewBox="0 0 24 24"
-        className="h-3.5 w-3.5 fill-current"
-        aria-hidden
-      >
-        <path d={siTiktok.path} />
-      </svg>
-    );
-  }
-  return null;
-}
-
 function platformDisplayName(platform: string): string {
   if (platform === "twitter") return "X";
   if (platform === "tiktok") return "TikTok";
+  if (platform === "instagram") return "Instagram";
   return platform.charAt(0).toUpperCase() + platform.slice(1);
 }
 
@@ -198,13 +159,13 @@ export function PublishingProgress({
               className="flex items-center justify-between gap-2 rounded-md border bg-background px-3 py-2"
             >
               <div className="flex items-center gap-2 min-w-0">
-                <PlatformIcon platform={target.platform} />
+                <PlatformIcon platform={target.platform} size={14} className="shrink-0" decorative />
                 <span className="text-xs font-medium truncate">
                   {platformDisplayName(target.platform)}
                 </span>
-                {target.platform_user_id && (
+                {target.platform_username && (
                   <span className="text-xs text-muted-foreground truncate">
-                    @{target.platform_user_id}
+                    {target.platform_username}
                   </span>
                 )}
               </div>
@@ -227,6 +188,8 @@ export function PublishingProgress({
         </div>
       )}
 
+      {post.targets?.some(t => t.platform === "instagram" && t.status === "PROCESSING") && <p role="status">Instagram is preparing your media or confirming publication.</p>}
+      {post.targets?.filter(t => t.platform === "instagram" && t.status === "UNKNOWN").map(t => <p key={t.id} role="alert" className="text-amber-800">{t.error_message || "Check Instagram before publishing again."}</p>)}
       {post.targets?.filter(t => t.platform === "tiktok" && t.status === "UNKNOWN").map(t => <p key={t.id} role="alert" className="text-amber-800">{t.error_message || "TikTok publication needs manual review. Check TikTok before attempting another post."}</p>)}
       {post.targets?.some(t => t.platform === "tiktok" && t.status === "PROCESSING") && <p role="status">{isInboxUpload ? "TikTok is processing your video for Inbox delivery." : "TikTok is processing your video. Publication is awaiting confirmation."}</p>}
       {post.targets?.filter(t => t.status === "RETRYING" && t.error_message).map(t => (

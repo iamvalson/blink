@@ -33,7 +33,12 @@ console.log("TikTok settings UI: 8 rendered component checks passed.");
 const progressSource=fs.readFileSync(new URL("./components/posts/publishing-progress.tsx",import.meta.url),"utf8");
 const progressJS=ts.transpileModule(progressSource,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText;
 const require=createRequire(import.meta.url);const progressExports={};
+const iconSource=fs.readFileSync(new URL("./components/accounts/platform-icon.tsx",import.meta.url),"utf8");
+const iconJS=ts.transpileModule(iconSource,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText;
+const iconExports={};
+vm.runInThisContext(`(function(require,exports){${iconJS}\n})`)(require,iconExports);
 const progressRequire=name=>{
+ if(name==="@/components/accounts/platform-icon")return iconExports;
  if(name==="@/lib/utils")return {cn:(...values)=>values.filter(Boolean).join(" ")};
  if(name==="@/components/ui/button")return {Button:({children,onClick,disabled})=>React.createElement("button",{onClick,disabled},children),buttonVariants:()=>""};
  if(name==="next/link")return {__esModule:true,default:({children,href})=>React.createElement("a",{href},children)};
@@ -59,3 +64,12 @@ const inbox = renderToStaticMarkup(React.createElement(progressExports.Publishin
 assert.match(inbox, /Sent to TikTok Inbox/);
 assert.match(inbox, /Open the notification in your TikTok Inbox/);
 assert.doesNotMatch(inbox, />Published</);
+
+const instagramProgress = (status, fields = {}) => renderToStaticMarkup(React.createElement(progressExports.PublishingProgress, {
+  post: { id: "ig-post", status: status === "PUBLISHED" ? "PUBLISHED" : "PUBLISHING",
+    targets: [{ id: "ig-target", platform: "instagram", status, ...fields }] },
+}));
+assert.match(instagramProgress("PROCESSING"), /Instagram is preparing your media/);
+assert.match(instagramProgress("UNKNOWN", { error_message: "Check Instagram before retrying" }), /Check Instagram before retrying/);
+assert.match(instagramProgress("PUBLISHED", { platform_url: "https://www.instagram.com/p/test/" }), /View on Instagram/);
+console.log("Instagram publication UI: processing, manual review, and result link passed.");

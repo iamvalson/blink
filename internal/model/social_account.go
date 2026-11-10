@@ -7,6 +7,7 @@ import (
 )
 
 type SocialAccount struct {
+	Username          string     `json:"username,omitempty"`
 	ID                uuid.UUID  `json:"id"`
 	UserID            uuid.UUID  `json:"user_id"`
 	Platform          string     `json:"platform"` // twitter, youtube, etc

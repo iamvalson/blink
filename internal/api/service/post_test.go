@@ -56,3 +56,15 @@ func TestCreatePostValidationErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestCreatePostRejectsMultipleReelAttachments(t *testing.T) {
+	account := uuid.New()
+	_, err := NewPostService(nil).CreatePost(context.Background(), uuid.New(), "reel-test", model.CreatePostInput{
+		Targets:          []uuid.UUID{account},
+		MediaIDs:         []uuid.UUID{uuid.New(), uuid.New()},
+		InstagramFormats: map[string]string{account.String(): "REELS"},
+	})
+	if !errors.Is(err, ErrPostValidation) || err.Error() != "post validation failed: Instagram Reels require exactly one MP4 or MOV video" {
+		t.Fatalf("unexpected validation result: %v", err)
+	}
+}

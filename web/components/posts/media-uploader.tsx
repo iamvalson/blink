@@ -23,17 +23,23 @@ type MediaUploaderProps = {
   onUpload?: (localId: string, file: File) => void;
   onRemove?: (item: MediaFile) => void;
   disabled?: boolean;
+  maxFiles?: number;
+  accept?: string;
+  fileHint?: string;
   /** When set, the add-more button is hidden and this message is shown instead. */
   addBlockedReason?: string | null;
 };
 
-export function MediaUploader({ media, onChange, onUpload, onRemove, disabled, addBlockedReason }: MediaUploaderProps) {
+export function MediaUploader({ media, onChange, onUpload, onRemove, disabled, addBlockedReason, maxFiles, accept = "image/*,video/*", fileHint = "PNG, JPG, GIF, MP4 and other supported formats" }: MediaUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleFiles = (files: FileList | null) => {
-    if (!files || disabled) return;
+  const availableSlots = maxFiles === undefined ? Infinity : Math.max(0, maxFiles - media.length);
+  const blockedReason = addBlockedReason ?? (availableSlots === 0 ? "Remove an attachment before adding another." : null);
 
-    const newFiles: MediaFile[] = Array.from(files).map((file) => ({
+  const handleFiles = (files: FileList | null) => {
+    if (!files || disabled || blockedReason) return;
+
+    const newFiles: MediaFile[] = Array.from(files).slice(0, availableSlots).map((file) => ({
       id: crypto.randomUUID(),
       file,
       previewUrl: URL.createObjectURL(file),
@@ -63,7 +69,7 @@ export function MediaUploader({ media, onChange, onUpload, onRemove, disabled, a
     onChange(media.filter((item) => item.id !== id));
   };
 
-  const isAddBlocked = Boolean(addBlockedReason);
+  const isAddBlocked = Boolean(blockedReason);
 
   return (
     <div className="space-y-3">
@@ -139,7 +145,7 @@ export function MediaUploader({ media, onChange, onUpload, onRemove, disabled, a
       {isAddBlocked ? (
         <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-foreground/50" />
-          <span>{addBlockedReason}</span>
+          <span>{blockedReason}</span>
         </div>
       ) : (
         <button
@@ -161,14 +167,14 @@ export function MediaUploader({ media, onChange, onUpload, onRemove, disabled, a
           </p>
 
           <p className="mt-1 text-xs text-muted-foreground">
-            PNG, JPG, GIF, MP4 and other supported formats
+            {fileHint}
           </p>
 
           <input
             ref={inputRef}
             type="file"
-            accept="image/*,video/*"
-            multiple
+            accept={accept}
+            multiple={maxFiles !== 1}
             disabled={disabled}
             className="hidden"
             onChange={(event) => {

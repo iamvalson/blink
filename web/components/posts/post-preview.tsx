@@ -2,15 +2,16 @@
 
 import { ImageIcon, MoreHorizontal } from "lucide-react";
 import { useState } from "react";
-import { siTiktok, siYoutube } from "simple-icons";
+import { PlatformIcon } from "@/components/accounts/platform-icon";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import type { Platform } from "./platform-selector";
+import { PLATFORMS, type Platform } from "@/types/platform";
 
 export type PreviewMedia = {
   id: string;
   previewUrl: string;
   file?: { type: string };
   contentType?: string;
+  label?: string;
 };
 
 type PostPreviewProps = {
@@ -19,6 +20,7 @@ type PostPreviewProps = {
   platforms: Platform[];
   title?: string | null;
   accountName?: string;
+  accountAvatarUrl?: string;
   saved?: boolean;
   date?: string;
 };
@@ -26,6 +28,9 @@ type PostPreviewProps = {
 function MediaPreview({ item }: { item: PreviewMedia }) {
   const [failed, setFailed] = useState(false);
   const contentType = item.contentType ?? item.file?.type ?? "";
+  if (!item.previewUrl) {
+    return <p className="rounded-lg bg-muted p-4 text-sm text-muted-foreground">{item.label ?? "Attachment"} is unavailable.</p>;
+  }
   if (failed) {
     return (
       <div role="status" className="rounded-lg bg-muted p-6 text-center text-sm text-muted-foreground">
@@ -38,6 +43,7 @@ function MediaPreview({ item }: { item: PreviewMedia }) {
     return (
       <video
         src={item.previewUrl}
+        aria-label={item.label ?? "Post attachment"}
         controls
         playsInline
         preload="metadata"
@@ -54,7 +60,7 @@ function MediaPreview({ item }: { item: PreviewMedia }) {
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src={item.previewUrl}
-        alt="Post attachment"
+        alt={item.label ?? "Post attachment"}
         onError={() => setFailed(true)}
         className="max-h-[520px] w-full object-contain"
       />
@@ -67,9 +73,22 @@ function MediaPreview({ item }: { item: PreviewMedia }) {
   );
 }
 
-export function PostPreview({ caption, media, platforms, title, accountName, saved = false, date }: PostPreviewProps) {
-  const previewPlatform = platforms[0] ?? "twitter";
-  const platformName = previewPlatform === "twitter" ? "X" : previewPlatform === "tiktok" ? "TikTok" : "YouTube";
+function ConnectedAccountAvatar({ name, url }: { name?: string; url?: string }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-sm font-semibold" aria-hidden>
+      {url?.startsWith("https://") && !failed ? (
+        // The provider hosts this public avatar. Avoid sending the Blink page URL as the referrer.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={url} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="size-full object-cover" />
+      ) : (name?.trim().slice(0, 1).toUpperCase() || "B")}
+    </div>
+  );
+}
+
+export function PostPreview({ caption, media, platforms, title, accountName, accountAvatarUrl, saved = false, date }: PostPreviewProps) {
+  const previewPlatform = platforms[0];
+  const platformName = PLATFORMS.find(platform => platform.id === previewPlatform)?.name;
   const displayName = accountName || "Your account";
   const [firstLine, ...remainingLines] = caption.split("\n");
   const usesCaptionTitle = previewPlatform === "youtube" && (!title || title === firstLine.trim());
@@ -82,7 +101,7 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
         <div>
           <h2 className="text-sm font-medium">{saved ? "Post preview" : "Preview"}</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            {saved ? `Content preview for ${platformName}. Platform layouts may vary.` : "See how your post will look."}
+            {saved ? (platformName ? `Content preview for ${platformName}. Platform layouts may vary.` : "Preview of saved content.") : "See how your post will look."}
           </p>
         </div>
       </CardHeader>
@@ -90,12 +109,13 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
         <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold">
-                {accountName ? accountName.slice(0, 1).toUpperCase() : "B"}
-              </div>
+              <ConnectedAccountAvatar key={accountAvatarUrl} name={accountName} url={accountAvatarUrl} />
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{displayName}</p>
-                <p className="text-xs text-muted-foreground">{saved ? platformName : previewPlatform === "youtube" ? "Your channel" : "@youraccount"}</p>
+                <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                  {saved && previewPlatform && <PlatformIcon platform={previewPlatform} size={12} decorative />}
+                  {saved ? (platformName ?? "Saved post") : previewPlatform === "youtube" ? "Your channel" : "@youraccount"}
+                </p>
               </div>
             </div>
             <MoreHorizontal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -109,20 +129,18 @@ export function PostPreview({ caption, media, platforms, title, accountName, sav
             )}
             {media.length > 0 ? (
               <div className="grid grid-cols-1 gap-2 overflow-hidden rounded-lg">
-                {media.slice(0, 4).map(item => <MediaPreview key={`${item.id}:${item.previewUrl}`} item={item} />)}
+                {media.map(item => <MediaPreview key={`${item.id}:${item.previewUrl}`} item={item} />)}
               </div>
             ) : !saved ? (
               <div className="flex h-32 items-center justify-center rounded-lg bg-muted/50">
                 {previewPlatform === "youtube" || previewPlatform === "tiktok" ? (
-                  <svg role="img" viewBox="0 0 24 24" className="size-6 fill-current text-muted-foreground" aria-label={platformName}>
-                    <path d={previewPlatform === "youtube" ? siYoutube.path : siTiktok.path} />
-                  </svg>
+                  <PlatformIcon platform={previewPlatform} size={24} className="text-muted-foreground" />
                 ) : <ImageIcon className="size-6 text-muted-foreground" />}
               </div>
             ) : !caption && !title ? <p className="text-sm text-muted-foreground">No content is available for this post.</p> : null}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
               <span>{date ? new Date(date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : saved ? "Saved post" : "Now"}</span>
-              <span>{saved ? platformName : `Post on ${platformName}`}</span>
+              {platformName && <span>{saved ? platformName : `Post on ${platformName}`}</span>}
             </div>
           </div>
         </div>
