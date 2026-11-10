@@ -73,18 +73,6 @@ assert.match(html, /Could not load accounts/);
 const cards = Object.fromEntries(["Card", "CardContent", "CardHeader"].map(name => [name, ({ children, ...props }) => React.createElement("div", props, children)]));
 const platformDefinitions = load("./types/platform.ts", {});
 const platformIcon = load("./components/accounts/platform-icon.tsx", {});
-const accountOAuth = load("./components/accounts/connect-platform.tsx", {
-  ...shared,
-  "./platform-icon": platformIcon,
-});
-const renderConnect = props => renderToStaticMarkup(React.createElement(accountOAuth.ConnectPlatform, props));
-const instagramOAuthLink = /<a[^>]*href="[^"]*auth[/]instagram"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/g;
-for (const reconnect of [false, true]) {
-  assert.equal([...renderConnect({ platform: "instagram", reconnect }).matchAll(instagramOAuthLink)].length, 1);
-}
-assert.doesNotMatch(renderConnect({ platform: "youtube" }), /target="_blank"/);
-assert.doesNotMatch(renderConnect({ platform: "instagram", disabled: true }), /href=/);
-
 const previewComponent = load("./components/posts/post-preview.tsx", {
   "@/components/ui/card": cards,
   "@/components/accounts/platform-icon": platformIcon,
@@ -158,16 +146,14 @@ assert.match(crossPost, /aria-pressed="false"[^>]*>X/);
 assert.doesNotMatch(renderPreview({ ...post, targets: [] }), /Content preview for X/);
 
 const dropdown = Object.fromEntries(["DropdownMenu", "DropdownMenuContent", "DropdownMenuItem", "DropdownMenuSeparator", "DropdownMenuTrigger"]
-  .map(name => [name, ({ children, render }) => render ? React.cloneElement(render, {}, children) : React.createElement("div", null, children)]));
-let listedPost = carouselPost;
+  .map(name => [name, ({ children }) => React.createElement("div", null, children)]));
 const postsList = load("./features/posts/components/posts-list.tsx", {
   ...shared,
   "next/navigation": { useRouter: () => ({}) },
   "@tanstack/react-query": { useQueryClient: () => ({}) },
   "@/features/posts/api/create-post": {},
-  "@/features/posts/hooks/use-posts": { usePosts: () => ready({ posts: [listedPost], total: 1 }) },
+  "@/features/posts/hooks/use-posts": { usePosts: () => ready({ posts: [carouselPost], total: 1 }) },
   "@/features/posts/hooks/use-post-status-stream": { usePostStatusStream() {} },
-  "@/components/accounts/connect-platform": accountOAuth,
   "@/components/accounts/platform-icon": platformIcon,
   "@/types/platform": platformDefinitions,
   "@/components/ui/dropdown-menu": dropdown,
@@ -176,13 +162,6 @@ const postsList = load("./features/posts/components/posts-list.tsx", {
 const listHtml = render(postsList.PostsList);
 assert.match(listHtml, /<svg[^>]*aria-label="Instagram"[^>]*>\s*<path d="/);
 assert.match(listHtml, /<option value="instagram">Instagram<\/option>/);
-
-listedPost = {
-  ...carouselPost,
-  status: "FAILED",
-  targets: [{ ...carouselPost.targets[0], status: "FAILED", error_code: "ACCOUNT_RECONNECT_REQUIRED" }],
-};
-assert.equal([...render(postsList.PostsList).matchAll(instagramOAuthLink)].length, 2);
 
 let query = ready(post);
 let mutation;

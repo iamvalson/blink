@@ -20,7 +20,6 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { platformOAuthLink } from "@/components/accounts/connect-platform";
 import { PlatformIcon } from "@/components/accounts/platform-icon";
 import { PLATFORMS } from "@/types/platform";
 import { formatDistanceToNow } from "date-fns";
@@ -95,7 +94,13 @@ function PostCard({
     failedTarget?.error_message?.toLowerCase().includes("refresh token is invalid or revoked") ||
     failedTarget?.error_message?.toLowerCase().includes("invalid_grant");
 
-  const reconnectPlatform = PLATFORMS.find(({ id }) => id === failedTarget?.platform);
+  const reconnectPlatform = failedTarget?.platform || platform;
+
+  const handleReconnect = () => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+    toast.info(`Redirecting to reconnect ${reconnectPlatform === "twitter" ? "X" : reconnectPlatform}...`);
+    window.location.href = `${apiUrl}/auth/${reconnectPlatform}`;
+  };
 
   const canDelete =
     post.status !== "QUEUED" && post.status !== "PUBLISHING" && post.status !== "PROCESSING";
@@ -182,24 +187,23 @@ function PostCard({
         )}
 
         {/* Error / reconnect */}
-        {isReconnectRequired && reconnectPlatform ? (
+        {isReconnectRequired ? (
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-md bg-amber-500/10 border border-amber-500/20 p-2.5 text-xs text-amber-800 dark:text-amber-300">
             <div className="flex items-center gap-1.5 font-medium">
               <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
               <span>
-                {reconnectPlatform.name} authorization expired. Reconnect Blink to publish.
+                {reconnectPlatform === "twitter" ? "X" : reconnectPlatform.toUpperCase()} authorization expired. Reconnect Blink to publish.
               </span>
             </div>
-            <a
-              {...platformOAuthLink(reconnectPlatform.id)}
-              className={buttonVariants({
-                size: "sm",
-                variant: "outline",
-                className: "min-h-11 text-xs lg:min-h-0 border-amber-500/30 hover:bg-amber-500/10 text-amber-900 dark:text-amber-200",
-              })}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="min-h-11 text-xs lg:min-h-0 border-amber-500/30 hover:bg-amber-500/10 text-amber-900 dark:text-amber-200"
+              onClick={handleReconnect}
             >
-              Reconnect {reconnectPlatform.name}
-            </a>
+              Reconnect {reconnectPlatform === "twitter" ? "X" : reconnectPlatform}
+            </Button>
           </div>
         ) : failedTarget?.error_message ? (
           <p className="line-clamp-2 wrap-anywhere text-xs text-red-600">
@@ -249,13 +253,13 @@ function PostCard({
                 Reschedule
               </DropdownMenuItem>
             )}
-            {isReconnectRequired && reconnectPlatform && (
+            {isReconnectRequired && (
               <DropdownMenuItem
-                render={<a {...platformOAuthLink(reconnectPlatform.id)} />}
+                onClick={handleReconnect}
                 className="gap-2 text-amber-600 dark:text-amber-400 focus:text-amber-700"
               >
                 <RefreshCcw className="h-3.5 w-3.5" />
-                Reconnect {reconnectPlatform.name}
+                Reconnect {reconnectPlatform === "twitter" ? "X" : reconnectPlatform}
               </DropdownMenuItem>
             )}
 
