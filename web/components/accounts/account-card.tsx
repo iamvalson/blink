@@ -3,7 +3,6 @@
 import { MoreHorizontal, RefreshCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   DropdownMenu,
@@ -17,7 +16,7 @@ import type { PlatformDefinition } from "@/types/platform";
 
 import { useDisconnectAccount } from "@/features/accounts/hooks/use-disconnect-account";
 import { AccountStatus } from "./account-status";
-import { ConnectPlatform } from "./connect-platform";
+import { ConnectPlatform, platformOAuthLink } from "./connect-platform";
 import { PlatformIcon } from "./platform-icon";
 import { InstagramBrowserLogin } from "./instagram-browser-login";
 
@@ -33,11 +32,6 @@ export function AccountCard({
   isLoading = false,
 }: AccountCardProps) {
   const disconnectMutation = useDisconnectAccount();
-
-  function handleReconnect() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-    window.location.href = `${apiUrl}/auth/${platform.id}`;
-  }
 
   function handleDisconnect() {
     const message = `Disconnect ${platform.name}? This revokes Blink's access and removes publishing records for this connection from Blink.`;
@@ -77,9 +71,10 @@ export function AccountCard({
               <span className="sr-only">Account options</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={handleReconnect}>
+              <DropdownMenuItem render={<a {...platformOAuthLink(platform.id)} />}>
                 <RefreshCcw className="mr-2 size-4" />
                 Reconnect
+                {platform.id === "instagram" && <span className="sr-only"> Instagram in a new tab</span>}
               </DropdownMenuItem>
               <DropdownMenuItem
                 variant="destructive"
@@ -94,27 +89,18 @@ export function AccountCard({
         )}
       </CardHeader>
 
-      <CardContent className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 [&_button]:min-h-11 lg:[&_button]:min-h-0">
+      <CardContent className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 [&_button]:min-h-11 lg:[&_button]:min-h-0 [&_a]:min-h-11 lg:[&_a]:min-h-0">
         <div>
           {account?.username && <p className="text-sm font-medium">@{account.username}</p>}
           <AccountStatus account={account} isLoading={isLoading} />
         </div>
 
-        {!account ? (
-          <ConnectPlatform platform={platform.id} isLoading={isLoading} />
-        ) : (
-          <Button
-            type="button"
-            variant={account.reconnect_required ? "default" : "outline"}
-            size="sm"
-            onClick={handleReconnect}
-            disabled={isLoading}
-            className={account.reconnect_required ? "bg-amber-600 hover:bg-amber-700 text-white" : ""}
-          >
-            <RefreshCcw className="mr-1.5 size-3.5" />
-            Reconnect
-          </Button>
-        )}
+        <ConnectPlatform
+          platform={platform.id}
+          isLoading={isLoading}
+          reconnect={Boolean(account)}
+          reconnectRequired={account?.reconnect_required}
+        />
         {platform.id === "instagram" && <InstagramBrowserLogin disabled={isLoading} />}
       </CardContent>
     </Card>

@@ -10,5 +10,6 @@ export function useAccounts() {
   return useQuery({
     queryKey: accountsQueryKey,
     queryFn: getAccounts,
+    refetchOnWindowFocus: "always",
   });
 }

@@ -1,8 +1,8 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCcw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { PlatformIcon } from "./platform-icon";
 
 import type { Platform } from "@/types/platform";
@@ -11,41 +11,42 @@ interface ConnectPlatformProps {
   platform: Platform;
   disabled?: boolean;
   isLoading?: boolean;
+  reconnect?: boolean;
+  reconnectRequired?: boolean;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
-
-const OAUTH_PATHS: Record<Platform, string> = {
-  twitter: "/auth/twitter",
-  youtube: "/auth/youtube",
-  tiktok: "/auth/tiktok",
-  instagram: "/auth/instagram",
-};
+export function platformOAuthLink(platform: Platform) {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+  return {
+    href: `${apiUrl}/auth/${platform}`,
+    ...(platform === "instagram" ? { target: "_blank", rel: "noopener noreferrer" } : {}),
+  };
+}
 
 export function ConnectPlatform({
   platform,
   disabled = false,
   isLoading = false,
+  reconnect = false,
+  reconnectRequired = false,
 }: ConnectPlatformProps) {
-  function handleConnect() {
-    const path = OAUTH_PATHS[platform];
+  const variant = reconnect && !reconnectRequired ? "outline" : "default";
+  const size = reconnect ? "sm" : "default";
+  const className = reconnectRequired ? "bg-amber-600 hover:bg-amber-700 text-white" : undefined;
+  const label = reconnect ? "Reconnect" : "Connect";
+  const link = platformOAuthLink(platform);
+  const icon = isLoading ? <Loader2 className="size-4 animate-spin" /> :
+    reconnect ? <RefreshCcw className="size-3.5" /> : <PlatformIcon platform={platform} size={16} decorative />;
 
-    window.location.href = `${API_URL}${path}`;
+  if (disabled || isLoading) {
+    return <Button type="button" variant={variant} size={size} className={className} disabled>{icon}{label}</Button>;
   }
 
   return (
-    <Button
-      type="button"
-      onClick={handleConnect}
-      disabled={disabled || isLoading}
-    >
-      {isLoading ? (
-        <Loader2 className="size-4 animate-spin" />
-      ) : (
-        <PlatformIcon platform={platform} size={16} />
-      )}
-
-      {isLoading ? "Connecting..." : "Connect"}
-    </Button>
+    <a {...link} className={buttonVariants({ variant, size, className })}>
+      {icon}
+      {label}
+      {link.target === "_blank" && <span className="sr-only"> Instagram in a new tab</span>}
+    </a>
   );
 }

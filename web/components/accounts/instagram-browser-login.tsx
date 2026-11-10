@@ -36,7 +36,7 @@ export function InstagramBrowserLogin({ disabled = false }: { disabled?: boolean
     <details className="w-full text-sm text-muted-foreground">
       <summary className="cursor-pointer">Instagram app opens with an error?</summary>
       <div className="mt-2 space-y-2">
-        <p>Create a login link, then paste it directly into the Safari address bar. Use the link within 10 minutes.</p>
+        <p>Create a login link, then paste it directly into the Safari address bar. Use the link within 10 minutes. If the app still opens, connect from desktop and return to Accounts on this device.</p>
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" variant="outline" disabled={disabled || loading} onClick={createLink}>
             {loading ? "Creating link…" : url ? "Create a new link" : "Create Safari login link"}
